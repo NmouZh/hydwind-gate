@@ -146,26 +146,22 @@ class HttpWebsiteClientTest {
         assertEquals(null, result.attemptsRemaining());
     }
 
-    @Test
-    void successfulStatusWithFailedBodyIsUnreachable() {
-        server.createContext("/api/plugin/login/verify",
-                exchange -> respond(exchange, 200, "{\"ok\":false,\"reason\":\"nope\"}"));
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "{\"ok\":false,\"reason\":\"nope\"}",
+            "{\"ok\":true}",
+            "{\"ok\":true,\"account\":{}}",
+            "{\"ok\":true,\"account\":null}",
+            "not json at all",
+            "[]"
+    })
+    void successfulStatusWithContractViolationIsContractMismatch(String body) {
+        server.createContext("/api/plugin/login/verify", exchange -> respond(exchange, 200, body));
 
         VerifyResult result = client(300, 300)
                 .verify("code", "Player_1", UUID.randomUUID());
 
-        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
-    }
-
-    @Test
-    void successBodyWithoutAccountIsUnreachable() {
-        server.createContext("/api/plugin/login/verify",
-                exchange -> respond(exchange, 200, "{\"ok\":true}"));
-
-        VerifyResult result = client(300, 300)
-                .verify("code", "Player_1", UUID.randomUUID());
-
-        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+        assertEquals(VerifyResult.Status.CONTRACT_MISMATCH, result.status());
     }
 
     @ParameterizedTest
@@ -181,22 +177,42 @@ class HttpWebsiteClientTest {
     }
 
     @Test
-    void forbiddenAndMissingEndpointsHaveExplicitStatuses() {
-        assertEquals(VerifyResult.Status.FORBIDDEN,
-                HttpWebsiteClient.mapVerifyResponse(403, "{\"reason\":\"forbidden\"}").status());
-        assertEquals(VerifyResult.Status.NOT_FOUND,
-                HttpWebsiteClient.mapVerifyResponse(404, "{\"reason\":\"not_found\"}").status());
-    }
-
-    @Test
-    void unknownConflictReasonIsUnreachable() {
+    void forbiddenEndpointHasExplicitStatusThroughRealHttp() {
         server.createContext("/api/plugin/login/verify",
-                exchange -> respond(exchange, 409, "{\"ok\":false,\"reason\":\"something_new\"}"));
+                exchange -> respond(exchange, 403, "{\"reason\":\"forbidden\"}"));
 
         VerifyResult result = client(300, 300)
                 .verify("code", "Player_1", UUID.randomUUID());
 
-        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+        assertEquals(VerifyResult.Status.FORBIDDEN, result.status());
+    }
+
+    @Test
+    void missingEndpointHasExplicitStatusThroughRealHttp() {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, 404, "{\"reason\":\"not_found\"}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.NOT_FOUND, result.status());
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "{\"ok\":false,\"reason\":\"something_new\"}",
+            "{\"ok\":false}",
+            "{\"ok\":false,\"reason\":null}",
+            "not json at all",
+            "[]"
+    })
+    void unknownConflictReasonOrMalformedBodyIsContractMismatch(String body) {
+        server.createContext("/api/plugin/login/verify", exchange -> respond(exchange, 409, body));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.CONTRACT_MISMATCH, result.status());
     }
 
     @Test
@@ -249,6 +265,7 @@ class HttpWebsiteClientTest {
         HealthResult result = client(300, 300).health();
 
         assertFalse(result.healthy());
+        assertFalse(result.transportFailure(), "网站答了 500，属于契约不匹配而非传输失败");
         assertEquals(0L, result.uptimeSeconds());
     }
 
@@ -262,16 +279,23 @@ class HttpWebsiteClientTest {
         HealthResult result = client(1000, 200).health();
 
         assertFalse(result.healthy());
+        assertTrue(result.transportFailure(), "超时属于传输层失败，应允许受控重启");
     }
 
-    @Test
-    void healthRequiresOkTrueInTheBody() {
-        server.createContext("/api/health",
-                exchange -> respond(exchange, 200, "{\"ok\":false,\"uptime\":9}"));
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "{\"ok\":false,\"uptime\":9}",
+            "{\"ok\":\"maybe\",\"uptime\":9}",
+            "{\"uptime\":9}",
+            "not json"
+    })
+    void healthRequiresWellFormedOkTrueBody(String body) {
+        server.createContext("/api/health", exchange -> respond(exchange, 200, body));
 
         HealthResult result = client(300, 300).health();
 
         assertFalse(result.healthy());
+        assertFalse(result.transportFailure(), "200 但健康体不符合契约，不应触发重启");
         assertEquals(0L, result.uptimeSeconds());
     }
 
@@ -289,11 +313,12 @@ class HttpWebsiteClientTest {
         HealthResult result = new HttpWebsiteClient(config).health();
 
         assertTrue(result.healthy());
+        assertFalse(result.transportFailure());
         assertEquals(7L, result.uptimeSeconds());
     }
 
     @Test
-    void reportsUnreachableWhenConnectionIsRefusedForHealth() throws IOException {
+    void reportsTransportFailureWhenConnectionIsRefusedForHealth() throws IOException {
         int unusedPort;
         try (ServerSocket socket = new ServerSocket(0)) {
             unusedPort = socket.getLocalPort();
@@ -301,7 +326,10 @@ class HttpWebsiteClientTest {
         HttpWebsiteClient client = new HttpWebsiteClient(
                 config("http://127.0.0.1:" + unusedPort, "test-token", 500, 500));
 
-        assertFalse(client.health().healthy());
+        HealthResult result = client.health();
+
+        assertFalse(result.healthy());
+        assertTrue(result.transportFailure(), "连接失败属于传输层失败，应允许受控重启");
     }
 
     private HttpWebsiteClient client(int connectMillis, int readMillis) {

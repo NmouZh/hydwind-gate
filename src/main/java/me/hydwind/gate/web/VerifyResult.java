@@ -31,7 +31,9 @@ public record VerifyResult(
         GAME_ID_MISMATCH,
         /** 尝试过于频繁，网站要求稍后再试。 */
         RATE_LIMITED,
-        /** 网站不可达、超时或返回了无法理解的内容。 */
+        /** 网站答得出响应，但响应结构与插件契约不符（版本不匹配或网站配置错误）。 */
+        CONTRACT_MISMATCH,
+        /** 网站不可达、连接失败或超时（传输层失败）。 */
         UNREACHABLE
     }
 
@@ -79,6 +81,11 @@ public record VerifyResult(
 
     public static VerifyResult rateLimited(Long retryAfterMs, Integer attemptsRemaining) {
         return new VerifyResult(Status.RATE_LIMITED, null, null, null, retryAfterMs, attemptsRemaining, null);
+    }
+
+    /** 网站有响应，但内容不符合预期契约；重启网站也无济于事。 */
+    public static VerifyResult contractMismatch() {
+        return failed(Status.CONTRACT_MISMATCH);
     }
 
     public static VerifyResult unreachable() {

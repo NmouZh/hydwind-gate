@@ -96,6 +96,14 @@ tasks.withType<Test>().configureEach {
 
 tasks.processResources {
     filteringCharset = "UTF-8"
+    // 把构建所用的 LimboAPI 版本展开进 jar，供启动检查与运行时安装版本对齐。
+    // 先复制成局部变量再传给 filesMatching：闭包只捕获 String，避免
+    // Configuration Cache 序列化 Gradle 脚本对象（同 downloadLimboApi 的约束）。
+    val limboVersion = limboApiVersion
+    inputs.property("limboVersion", limboVersion)
+    filesMatching("limbo-version.properties") {
+        expand(mapOf("limboVersion" to limboVersion))
+    }
 }
 
 // 只产出包含运行时依赖的插件 jar，避免 CI 误传瘦 jar。

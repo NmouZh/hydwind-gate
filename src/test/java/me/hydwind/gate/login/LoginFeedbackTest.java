@@ -115,4 +115,13 @@ class LoginFeedbackTest {
         assertFalse(feedback.triggerRestart());
         assertEquals(messages.serviceMisconfigured(), feedback.message());
     }
+
+    @Test
+    void contractMismatchIsTreatedAsServiceMisconfigurationWithoutRestart() {
+        LoginFeedback feedback = LoginFeedback.from(VerifyResult.contractMismatch(), messages, "P");
+
+        assertFalse(feedback.authenticated());
+        assertFalse(feedback.triggerRestart(), "契约不匹配重启网站无意义，不应触发受控重启");
+        assertEquals(messages.serviceMisconfigured(), feedback.message());
+    }
 }

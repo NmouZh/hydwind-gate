@@ -3,7 +3,7 @@ package me.hydwind.gate.login;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import me.hydwind.gate.auth.KaomojiCode;
+import me.hydwind.gate.auth.LoginCode;
 import org.junit.jupiter.api.Test;
 
 class LoginCommandTest {
@@ -25,7 +25,7 @@ class LoginCommandTest {
     }
 
     @Test
-    void preservesKaomojiCodeContainingSpaces() {
+    void preservesLoginCodeContainingSpaces() {
         LoginCommand command = LoginCommand.parse("/login (・ω・) (´▽｀)");
 
         assertEquals(LoginCommand.Status.LOGIN, command.status());
@@ -50,8 +50,8 @@ class LoginCommandTest {
     @Test
     void rejectsCodesAboveTheWebsiteLimit() {
         assertEquals(LoginCommand.Status.LOGIN,
-                LoginCommand.parse("/login " + "A".repeat(KaomojiCode.MAX_LENGTH)).status());
+                LoginCommand.parse("/login " + "A".repeat(LoginCode.MAX_LENGTH)).status());
         assertEquals(LoginCommand.Status.TOO_LONG,
-                LoginCommand.parse("/login " + "A".repeat(KaomojiCode.MAX_LENGTH + 1)).status());
+                LoginCommand.parse("/login " + "A".repeat(LoginCode.MAX_LENGTH + 1)).status());
     }
 }

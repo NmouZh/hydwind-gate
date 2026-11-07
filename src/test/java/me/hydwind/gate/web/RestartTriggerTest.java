@@ -66,6 +66,16 @@ class RestartTriggerTest {
     }
 
     @Test
+    void contractMismatchDoesNotWriteRestartRequest() {
+        website.contractMismatch = true;
+        RestartTrigger trigger = trigger(settings(requestFile));
+
+        trigger.onUnreachable();
+
+        assertFalse(Files.exists(requestFile), "网站有响应但契约不匹配时不应触发重启");
+    }
+
+    @Test
     void secondTriggerWithinCooldownIsRejected() throws IOException {
         RestartTrigger trigger = trigger(settings(requestFile));
         trigger.onUnreachable();
@@ -110,12 +120,20 @@ class RestartTriggerTest {
     }
 
     @Test
-    void healthProbeExceptionIsTreatedAsUnhealthy() {
+    void healthProbeExceptionDoesNotWriteOrConsumeRestartAllowance() throws IOException {
         website.failWith = new IllegalStateException("boom");
         RestartTrigger trigger = trigger(settings(requestFile));
 
         assertDoesNotThrow(trigger::onUnreachable);
-        assertTrue(Files.exists(requestFile), "探活异常应按不健康处理并尝试写入");
+        assertFalse(Files.exists(requestFile), "探活自身异常不应写重启请求文件");
+
+        website.failWith = null;
+        trigger.onUnreachable();
+        assertTrue(Files.exists(requestFile), "探活恢复后应保留首次重启额度");
+        Files.delete(requestFile);
+        clock.advance(Duration.ofMinutes(10));
+        trigger.onUnreachable();
+        assertTrue(Files.exists(requestFile), "异常未消耗额度，小时上限仍应允许第二次重启");
     }
 
     private RestartTrigger trigger(RestartSettings settings) {
@@ -129,6 +147,7 @@ class RestartTriggerTest {
     private static final class FakeWebsiteClient implements WebsiteClient {
 
         private boolean healthy;
+        private boolean contractMismatch;
         private RuntimeException failWith;
 
         @Override
@@ -140,6 +159,9 @@ class RestartTriggerTest {
         public HealthResult health() {
             if (failWith != null) {
                 throw failWith;
+            }
+            if (contractMismatch) {
+                return HealthResult.unhealthyContract();
             }
             return healthy ? HealthResult.healthy(42) : HealthResult.unhealthy();
         }

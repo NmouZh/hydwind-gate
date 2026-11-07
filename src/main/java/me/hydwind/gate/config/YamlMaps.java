@@ -5,8 +5,9 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * SnakeYAML 解析出的 {@code Map} 的读取工具。所有 getter 都带默认值，
- * 配置缺项时插件仍能启动。
+ * SnakeYAML 解析出的 {@code Map} 的读取工具。文本与缺失项都有默认值，
+ * 配置缺项时插件仍能启动；数值字段的字符串写法若无法解析则直接失败，
+ * 避免 {@code "600s"} 之类的笔误被静默当成默认值。
  */
 public final class YamlMaps {
 
@@ -37,6 +38,15 @@ public final class YamlMaps {
         return value.isEmpty() ? fallback : value;
     }
 
+    /**
+     * 读取整数值。
+     *
+     * <p>数字类型直接取 {@code long}；字符串尝试解析，无法解析时抛
+     * {@link IllegalArgumentException}，让启动或 reload 失败并指出具体键名。
+     * 值为 {@code null}、缺项或其它类型（如 Boolean）时仍回退 {@code fallback}。</p>
+     *
+     * @throws IllegalArgumentException 当值是字符串且不是合法整数时
+     */
     public static long longValue(Map<String, Object> section, String key, long fallback) {
         Object value = section.get(key);
         if (value instanceof Number number) {
@@ -45,8 +55,9 @@ public final class YamlMaps {
         if (value instanceof String string) {
             try {
                 return Long.parseLong(string.trim());
-            } catch (NumberFormatException ignored) {
-                return fallback;
+            } catch (NumberFormatException exception) {
+                throw new IllegalArgumentException(
+                        "config value '" + key + "' is not a number: " + value, exception);
             }
         }
         return fallback;

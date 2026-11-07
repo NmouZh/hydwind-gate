@@ -1,101 +1,49 @@
 package me.hydwind.gate.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
 /**
- * {@code /hydwind} 的纯文本解析。CommandManager 与 limbo {@code onChat}
- * 两个入口共用同一套解析规则。
+ * {@link AdminCommandRequest} 的 record 语义。
+ *
+ * <p>解析规则已迁到 {@link CommandGrammar}，由 {@code CommandGrammarTest} 覆盖；
+ * 这里只固定结果载体的契约。</p>
  */
 class AdminCommandRequestTest {
 
     @Test
-    void emptyInputIsUsage() {
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseArgs().type());
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseArgs("  ").type());
+    void keepsTypeAndTarget() {
+        AdminCommandRequest request = new AdminCommandRequest(AdminCommandRequest.Type.APPROVE, "Alice");
+        assertEquals(AdminCommandRequest.Type.APPROVE, request.type());
+        assertEquals("Alice", request.target());
+
+        assertNull(new AdminCommandRequest(AdminCommandRequest.Type.STATUS, null).target());
     }
 
     @Test
-    void statusAndReloadTakeNoTarget() {
-        AdminCommandRequest status = AdminCommandRequest.parseArgs("status");
-        assertEquals(AdminCommandRequest.Type.STATUS, status.type());
-        assertNull(status.target());
-
-        AdminCommandRequest reload = AdminCommandRequest.parseArgs("reload");
-        assertEquals(AdminCommandRequest.Type.RELOAD, reload.type());
-        assertNull(reload.target());
+    void rejectsNullType() {
+        assertThrows(NullPointerException.class, () -> new AdminCommandRequest(null, "Alice"));
     }
 
     @Test
-    void approveAndKickCarryTheTargetAndFoldSubcommandCase() {
-        AdminCommandRequest approve = AdminCommandRequest.parseArgs("APPROVE", "Alice");
-        assertEquals(AdminCommandRequest.Type.APPROVE, approve.type());
-        assertEquals("Alice", approve.target());
+    void hasValueSemantics() {
+        AdminCommandRequest first = new AdminCommandRequest(AdminCommandRequest.Type.KICK, "Bob");
+        AdminCommandRequest same = new AdminCommandRequest(AdminCommandRequest.Type.KICK, "Bob");
+        AdminCommandRequest different = new AdminCommandRequest(AdminCommandRequest.Type.KICK, "Alice");
 
-        AdminCommandRequest kick = AdminCommandRequest.parseArgs("Kick", "Bob");
-        assertEquals(AdminCommandRequest.Type.KICK, kick.type());
-        assertEquals("Bob", kick.target());
+        assertEquals(first, same);
+        assertEquals(first.hashCode(), same.hashCode());
+        assertNotEquals(first, different);
     }
 
     @Test
-    void missingTargetIsKeptForCommandSpecificUsage() {
-        AdminCommandRequest approve = AdminCommandRequest.parseArgs("approve");
-        assertEquals(AdminCommandRequest.Type.APPROVE, approve.type());
-        assertNull(approve.target());
-
-        AdminCommandRequest kick = AdminCommandRequest.parseArgs("kick");
-        assertEquals(AdminCommandRequest.Type.KICK, kick.type());
-        assertNull(kick.target());
-    }
-
-    @Test
-    void extraArgumentsFallBackToUsage() {
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseArgs("status", "x").type());
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseArgs("reload", "x").type());
-        assertEquals(AdminCommandRequest.Type.USAGE,
-                AdminCommandRequest.parseArgs("approve", "Alice", "extra").type());
-        assertEquals(AdminCommandRequest.Type.USAGE,
-                AdminCommandRequest.parseArgs("kick", "Bob", "extra").type());
-    }
-
-    @Test
-    void unknownSubcommandIsReported() {
-        assertEquals(AdminCommandRequest.Type.UNKNOWN, AdminCommandRequest.parseArgs("wat").type());
-    }
-
-    @Test
-    void parseLineOnlyReactsToHydwind() {
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("/login ABC").type());
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("hello there").type());
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("").type());
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine(null).type());
-    }
-
-    @Test
-    void parseLineHandlesSlashWhitespaceAndFoldedCase() {
-        assertEquals(AdminCommandRequest.Type.STATUS,
-                AdminCommandRequest.parseLine("/hydwind status").type());
-        assertEquals(AdminCommandRequest.Type.STATUS,
-                AdminCommandRequest.parseLine("  HYDWIND   STATUS  ").type());
-        assertEquals(AdminCommandRequest.Type.APPROVE,
-                AdminCommandRequest.parseLine("/hydwind approve Alice").type());
-        assertEquals("Alice",
-                AdminCommandRequest.parseLine("/hydwind approve Alice").target());
-    }
-
-    @Test
-    void bareHydwindLineIsUsage() {
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseLine("/hydwind").type());
-        assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseLine("/hydwind   ").type());
-    }
-
-    @Test
-    void commandPrefixMustBeExactlyHydwind() {
-        assertEquals(AdminCommandRequest.Type.NONE,
-                AdminCommandRequest.parseLine("/hydwindx status").type());
-        assertEquals(AdminCommandRequest.Type.NONE,
-                AdminCommandRequest.parseLine("not-hydwind status").type());
+    void noLongerHasNoneType() {
+        // ADR-0002 第 5 节：limbo 侧改用 Optional 表达“不是我的命令”。
+        assertThrows(IllegalArgumentException.class,
+                () -> AdminCommandRequest.Type.valueOf("NONE"));
     }
 }

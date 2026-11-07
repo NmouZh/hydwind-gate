@@ -4,6 +4,12 @@
 
 Accepted — 2026-11-07
 
+## Related
+
+- [ADR-0002: 门禁流程的 deepening 契约](0002-gate-flow-deepening.md) refines 本 ADR。
+  ADR-0002 只细化 Velocity 插件内部的门禁流程结构（登录编排、管理动作、命令语法、运行时代际），
+  不改变本 ADR 的平台选择；两者是补充关系，不是 supersedes。
+
 ## Context
 
 VC 服是 **Velocity 代理**，不是 Paper 服务端。之前的 `hydwind-gate` 按 Paper 26.3 实现，使用 Paper Dialog API、Bukkit 事件和世界内冻结，无法在 Velocity 加载。
