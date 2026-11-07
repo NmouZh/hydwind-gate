@@ -681,4 +681,37 @@ class LoginSessionStoreTest {
                 "deadline 前一纳秒仍属于有效窗口，必须允许认证");
         assertTrue(store.isAuthenticated(THIRD));
     }
+
+    @Test
+    void forceAuthenticateCannotReviveATimedOutSession() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT)));
+
+        assertFalse(store.forceAuthenticate(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(1)),
+                "已超时会话正在被断开，管理员放行不能把它复活");
+        assertTrue(store.forceAuthenticateByGameId("PlayerOne", START.plus(LOGIN_TIMEOUT).plusSeconds(2))
+                        .isEmpty(),
+                "按名放行同样不能复活已超时会话");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(PLAYER).orElseThrow().status(),
+                "拒绝放行不得改变会话状态");
+        assertFalse(store.isAuthenticated(PLAYER));
+    }
+
+    @Test
+    void removeIfSessionDoesNotDeleteAReplacedSession() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        LoginSession stale = store.find(PLAYER).orElseThrow();
+
+        // 玩家断线（未认证会话被移除）后重连，建立新会话。
+        store.quit(PLAYER, START.plusSeconds(1));
+        LoginSession fresh = join(store, PLAYER, "PlayerOne", START.plusSeconds(2));
+        assertFalse(store.removeIfSession(PLAYER, stale),
+                "kick 持有的是旧快照，不能删掉重连后建立的新会话");
+        assertEquals(fresh, store.find(PLAYER).orElseThrow());
+
+        assertTrue(store.removeIfSession(PLAYER, fresh), "当前会话匹配时应正常移除");
+        assertTrue(store.find(PLAYER).isEmpty());
+    }
 }

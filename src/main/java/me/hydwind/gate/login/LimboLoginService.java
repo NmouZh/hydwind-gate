@@ -49,8 +49,10 @@ public final class LimboLoginService implements LimboResidents {
     private volatile LimboSettings activeSettings =
             new LimboSettings(PluginConfig.DEFAULT_LIMBO_WORLD, PluginConfig.DEFAULT_LIMBO_SPAWN);
 
-    private LimboFactory factory;
-    private Limbo limbo;
+    private volatile LimboFactory factory;
+    private volatile Limbo limbo;
+    /** shutdown 之后不再接受新的 spawn/register；避免 handler 逃过统一关闭。 */
+    private volatile boolean closed;
 
     public LimboLoginService(HydwindGatePlugin plugin, ProxyServer server, Logger logger) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
@@ -105,14 +107,20 @@ public final class LimboLoginService implements LimboResidents {
 
     /** 把玩家放进 limbo；无论调用线程为何，LimboAPI 会切回玩家事件循环。 */
     public void spawnInLimbo(Player player) {
-        if (limbo == null || factory == null) {
-            throw new IllegalStateException("Limbo is not initialized");
+        Limbo activeLimbo = limbo;
+        if (closed || activeLimbo == null || factory == null) {
+            throw new IllegalStateException("Limbo is not initialized or already shut down");
         }
-        limbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this));
+        activeLimbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this));
     }
 
     /** limbo 玩家在 {@code onSpawn} 后登记，供管理命令与状态统计使用。 */
     public void register(LoginSessionHandler handler) {
+        if (closed) {
+            // 关闭与 spawn 竞争时，handler 可能错过 shutdown 的遍历；由这里补关。
+            handler.shutdown();
+            return;
+        }
         residents.put(handler.uuid(), handler);
     }
 
@@ -207,14 +215,16 @@ public final class LimboLoginService implements LimboResidents {
      * 避免插件卸载后任务继续在 LimboAPI 的执行器上运行。</p>
      */
     public void shutdown() {
+        closed = true;
         List<LoginSessionHandler> handlers = List.copyOf(residents.values());
         residents.clear();
         for (LoginSessionHandler handler : handlers) {
             handler.shutdown();
         }
-        if (limbo != null) {
-            limbo.dispose();
-            limbo = null;
+        Limbo activeLimbo = limbo;
+        limbo = null;
+        if (activeLimbo != null) {
+            activeLimbo.dispose();
         }
     }
 

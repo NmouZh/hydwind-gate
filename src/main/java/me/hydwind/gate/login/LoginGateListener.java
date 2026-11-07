@@ -106,7 +106,14 @@ public final class LoginGateListener {
         } catch (RuntimeException exception) {
             logger.error("Failed to spawn player {} into limbo; denying access.", player.getUsername(), exception);
             sessionStore.quit(player.getUniqueId(), clock.instant());
-            player.disconnect(Component.text(plugin.messages().serviceMisconfigured()));
+            // 关闭过程中运行时代际可能已释放；此时不能用 plugin.messages()（会抛异常）。
+            String reason;
+            try {
+                reason = plugin.messages().serviceMisconfigured();
+            } catch (IllegalStateException runtimeGone) {
+                reason = me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured();
+            }
+            player.disconnect(Component.text(reason));
         }
     }
 }

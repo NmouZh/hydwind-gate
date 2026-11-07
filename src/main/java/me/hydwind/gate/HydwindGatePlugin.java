@@ -232,7 +232,13 @@ public final class HydwindGatePlugin {
                     timedOut.size(), timedOut.stream().map(LoginSession::gameId).toList());
             // 只标记不踢人会让玩家卡在 limbo：sweep 必须驱动断开。
             // per-player 定时器仍是主要路径；这里覆盖定时器丢失或先于它执行的情况。
-            String message = messages().sessionTimeout();
+            String message;
+            try {
+                message = messages().sessionTimeout();
+            } catch (IllegalStateException runtimeGone) {
+                // 插件正在关闭、运行时代际已释放；此时没有需要提示的玩家。
+                return;
+            }
             for (LoginSession session : timedOut) {
                 if (!limboLoginService.timeOut(session.uuid(), message)) {
                     // 不在 limbo 时只需清掉过期会话；用状态比较避免删掉玩家在

@@ -57,6 +57,10 @@ public final class AdminActionService {
         if (session.filter(LoginSession::isAuthenticated).isPresent()) {
             return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, session.get().gameId());
         }
+        // 已超时的会话正在被 sweep/per-player 定时器断开；放行不成立。
+        if (session.isPresent() && !awaitingAuthentication(session.get())) {
+            return new AdminResult(AdminResult.Kind.NOT_FOUND, playerName);
+        }
 
         String displayName = resident.map(LimboResidents.Resident::gameId)
                 .or(() -> session.map(LoginSession::gameId))
@@ -71,9 +75,14 @@ public final class AdminActionService {
             return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, displayName);
         }
         if (resident.isPresent()) {
-            // limbo 中可能是重连后的新连接：它的会话若仍是 PENDING，必须再放行一次，
-            // 否则转服会被 ServerPreConnectEvent 拒绝。
+            // limbo 中可能是重连后的新连接：它的会话若仍是 PENDING/VERIFYING，
+            // 必须再放行一次，否则转服会被 ServerPreConnectEvent 拒绝。
             sessions.forceAuthenticate(resident.get().uuid(), clock.instant());
+            if (!sessions.find(resident.get().uuid())
+                    .map(LoginSession::isAuthenticated).orElse(false)) {
+                // 该新连接已超时或已消失：不要让管理端误报“已放行”。
+                return new AdminResult(AdminResult.Kind.NOT_FOUND, displayName);
+            }
             boolean stillInLimbo = residents.approve(resident.get().uuid(), message);
             return new AdminResult(stillInLimbo
                     ? AdminResult.Kind.APPROVED_IN_LIMBO
@@ -121,7 +130,8 @@ public final class AdminActionService {
                 .or(() -> resident.map(LimboResidents.Resident::gameId))
                 .orElseGet(() -> online.flatMap(backend::nameOf).orElse(playerName));
 
-        sessions.remove(uuid);
+        // 只删除刚才查到的那个会话；期间玩家重连建立的新会话必须保留。
+        session.ifPresent(found -> sessions.removeIfSession(uuid, found));
 
         if (resident.isPresent() && residents.kick(resident.get().uuid(), message)) {
             return new AdminResult(AdminResult.Kind.KICKED_IN_LIMBO, displayName);
@@ -129,6 +139,11 @@ public final class AdminActionService {
         // limbo 中已无人：断开后端连接；玩家不在线时 KICKED_BACKEND 表示“已清理干净”。
         online.ifPresent(player -> backend.disconnect(player, message));
         return new AdminResult(AdminResult.Kind.KICKED_BACKEND, displayName);
+    }
+
+    private static boolean awaitingAuthentication(LoginSession session) {
+        return session.status() == LoginSession.Status.PENDING
+                || session.status() == LoginSession.Status.VERIFYING;
     }
 
     /**

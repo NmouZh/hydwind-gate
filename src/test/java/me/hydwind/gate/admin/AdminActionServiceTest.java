@@ -41,15 +41,15 @@ class AdminActionServiceTest {
             sessions, residents, backend, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
-    void approveLimboOnlyReturnsApprovedInLimbo() {
+    void approveLimboResidentWithoutSessionReturnsNotFound() {
         residents.add(PLAYER, NAME);
 
         AdminResult result = service.approve(NAME, MESSAGE);
 
-        assertEquals(AdminResult.Kind.APPROVED_IN_LIMBO, result.kind());
+        assertEquals(AdminResult.Kind.NOT_FOUND, result.kind(),
+                "没有会话可写时无法通过 ServerPreConnectEvent，不能误报已放行");
         assertEquals(NAME, result.playerName());
-        // 没有会话可写，说明 limbo 玩家也能被单独放行。
-        assertEquals(List.of(approveEvent(PLAYER, false)), residents.events);
+        assertEquals(List.of(), residents.events);
     }
 
     @Test
@@ -184,6 +184,18 @@ class AdminActionServiceTest {
         assertEquals(NAME, result.playerName());
         assertEquals(List.of(), residents.events);
         assertEquals(List.of(), backend.events);
+    }
+
+    @Test
+    void approveTimedOutSessionReturnsNotFound() {
+        joinSession();
+        assertTrue(sessions.timeOut(PLAYER, NOW.plus(LOGIN_TIMEOUT)));
+
+        AdminResult result = service.approve(NAME, MESSAGE);
+
+        assertEquals(AdminResult.Kind.NOT_FOUND, result.kind(),
+                "已超时会话正在被断开，放行不成立，不能误报已放行");
+        assertEquals(List.of(), residents.events);
     }
 
     private void joinSession() {

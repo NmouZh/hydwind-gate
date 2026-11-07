@@ -277,10 +277,10 @@ public final class LoginSessionStore {
                 .findFirst();
     }
 
-    /** 管理员手动放行：任意存在且未认证的会话直接置为 AUTHENTICATED。 */
+    /** 管理员手动放行：只有仍可认证（PENDING / VERIFYING）的会话能写入 AUTHENTICATED。 */
     public synchronized boolean forceAuthenticate(UUID uuid, Instant now) {
         LoginSession session = sessions.get(uuid);
-        if (session == null || session.isAuthenticated()) {
+        if (session == null || !awaitingAuthentication(session)) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.AUTHENTICATED, now));
@@ -299,7 +299,9 @@ public final class LoginSessionStore {
                 .filter(candidate -> candidate.gameId().equals(gameId))
                 .findFirst()
                 .orElse(null);
-        if (session == null || session.isAuthenticated()) {
+        // TIMED_OUT 不能复活：sweep 已经决定要断开这个玩家，放行只会制造
+        // “会话已认证但 handler 正在踢人”的分叉状态。
+        if (session == null || !awaitingAuthentication(session)) {
             return Optional.empty();
         }
         LoginSession updated = session.transitionTo(LoginSession.Status.AUTHENTICATED, now);
@@ -315,6 +317,19 @@ public final class LoginSessionStore {
      */
     public synchronized boolean remove(UUID uuid) {
         return sessions.remove(uuid) != null;
+    }
+
+    /**
+     * 只在会话仍是调用方刚才看到的那个实例时移除它。
+     *
+     * <p>管理员 kick 先查会话、再执行删除；这期间玩家可能断线重连并建立了
+     * 新会话。用 record 的精确相等比较，避免删掉崭新会话。</p>
+     *
+     * @return 是否真的移除了期望的那个会话
+     */
+    public synchronized boolean removeIfSession(UUID uuid, LoginSession expected) {
+        Objects.requireNonNull(expected, "expected");
+        return sessions.remove(uuid, expected);
     }
 
     /**

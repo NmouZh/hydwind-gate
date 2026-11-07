@@ -105,10 +105,12 @@ public final class LoginSessionHandler implements LimboSessionHandler {
 
         // 管理员可能在 spawn 之前就放行了（approve-before-spawn）：会话已是
         // AUTHENTICATED 时不再提示、不再排超时任务，直接转服，避免卡在 limbo。
+        // 用 CAS 与 approveByAdmin 互斥，避免两条路径各转服一次。
         if (sessionAuthenticated()) {
-            authenticated.set(true);
-            cancelTasks();
-            transferToMainServer();
+            if (authenticated.compareAndSet(false, true)) {
+                cancelTasks();
+                transferToMainServer();
+            }
             return;
         }
 
@@ -122,9 +124,10 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             return;
         }
         if (authenticated.get() || sessionAuthenticated()) {
-            authenticated.set(true);
-            cancelTasks();
-            transferToMainServer();
+            if (authenticated.compareAndSet(false, true)) {
+                cancelTasks();
+                transferToMainServer();
+            }
             return;
         }
 
@@ -144,6 +147,12 @@ public final class LoginSessionHandler implements LimboSessionHandler {
                 .toMillis();
         timeoutTask = player.getScheduledExecutor().schedule(
                 this::timeOut, Math.max(0L, timeoutMillis), TimeUnit.MILLISECONDS);
+
+        // 取消可能发生在任务赋值之前（approve/kick/断开），那时 cancelTasks 读到 null；
+        // 赋值后再复核一次，避免任务在已经结束的会话上永久空转。
+        if (closed.get() || authenticated.get()) {
+            cancelTasks();
+        }
     }
 
     @Override
@@ -375,13 +384,17 @@ public final class LoginSessionHandler implements LimboSessionHandler {
      * @return 本 handler 是否因此被关闭
      */
     public boolean timeOutNow(String message) {
-        if (authenticated.get() || !closed.compareAndSet(false, true)) {
+        if (authenticated.get()) {
             return false;
         }
-        // 只处理仍属于本连接、且确实已超时的会话；玩家重连会建立新会话。
+        // 先让会话 Module 做唯一判定：只有确实仍处于超时状态才继续。
+        // 顺序不能反过来——先 CAS 再复核，若管理员 approve/kick 插在中间，
+        // 回滚 closed 会留下“会话已认证但 handler 仍拒绝转服”或
+        // “玩家在线却已从两个登记表消失”的不可恢复状态。
         if (!sessionStore.timeOut(uuid, clock.instant())) {
-            // 复核不成立：撤销关闭标记，让会话继续可操作。
-            closed.set(false);
+            return false;
+        }
+        if (!closed.compareAndSet(false, true)) {
             return false;
         }
         cancelTasks();
