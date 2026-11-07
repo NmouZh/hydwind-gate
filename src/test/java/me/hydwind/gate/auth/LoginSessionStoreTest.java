@@ -29,12 +29,12 @@ class LoginSessionStoreTest {
 
         assertTrue(store.beginVerification(PLAYER, START.plusSeconds(30)));
         assertEquals(LoginSession.Status.VERIFYING, store.find(PLAYER).orElseThrow().status());
-        assertEquals(START.plusSeconds(30), store.find(PLAYER).lastActivityAt());
+        assertEquals(START.plusSeconds(30), store.find(PLAYER).orElseThrow().lastActivityAt());
         assertFalse(store.beginVerification(PLAYER, START.plusSeconds(31)));
 
         assertTrue(store.authenticationSucceeded(PLAYER, START.plusSeconds(35)));
         assertEquals(LoginSession.Status.AUTHENTICATED, store.find(PLAYER).orElseThrow().status());
-        assertEquals(START.plusSeconds(35), store.find(PLAYER).lastActivityAt());
+        assertEquals(START.plusSeconds(35), store.find(PLAYER).orElseThrow().lastActivityAt());
         assertFalse(store.beginVerification(PLAYER, START.plusSeconds(36)));
     }
 
