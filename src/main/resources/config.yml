@@ -1,0 +1,18 @@
+# HydwindGate 配置。
+# 修改后可通过 /hydwind reload 热重载（该命令由后续 ticket 提供）。
+
+website:
+  # 网站根地址，插件据此拼接 /api/health 与 /api/plugin/login/verify。
+  base-url: "http://103.236.99.253:62179"
+  # 网站插件令牌，与站务令牌分离。首次部署时填入。
+  plugin-token: ""
+  # HTTP 连接与读取超时，单位毫秒。
+  connect-timeout-millis: 3000
+  read-timeout-millis: 5000
+
+messages:
+  # 占位符由后续 ticket 在发送提示时替换。
+  gate-prompt: "请在浏览器打开 {url} 登录账号，然后把验证码发送到游戏聊天框，或使用 /login <验证码>。"
+  login-success: "登录成功，欢迎回来，{name}！"
+  service-unavailable: "认证服务暂时不可用，请稍后重试。"
+  session-timeout: "登录超时，请重新进服完成认证。"

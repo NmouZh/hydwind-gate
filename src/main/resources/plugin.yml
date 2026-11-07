@@ -1,0 +1,7 @@
+name: HydwindGate
+version: '${version}'
+main: me.hydwind.gate.HydwindGatePlugin
+api-version: '26.3'
+authors: [NmouZh]
+description: 氢风进服门禁插件
+website: https://github.com/NmouZh/hydwind-gate
