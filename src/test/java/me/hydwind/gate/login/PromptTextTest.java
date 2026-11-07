@@ -20,7 +20,7 @@ class PromptTextTest {
     void appendsUrlWhenTemplateOmitsPlaceholder() {
         PromptText prompt = PromptText.fromTemplate("请打开网站登录", "http://example.test/gate");
 
-        assertEquals("请打开网站 ", prompt.beforeUrl());
+        assertEquals("请打开网站登录 ", prompt.beforeUrl());
         assertEquals("http://example.test/gate", prompt.url());
         assertEquals("", prompt.afterUrl());
     }
