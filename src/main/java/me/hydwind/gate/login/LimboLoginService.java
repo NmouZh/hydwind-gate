@@ -116,8 +116,15 @@ public final class LimboLoginService implements LimboResidents {
         residents.put(handler.uuid(), handler);
     }
 
-    public void unregister(UUID uuid) {
-        residents.remove(uuid);
+    /**
+     * 注销 limbo 登记。
+     *
+     * <p>只移除指定 handler：玩家断开后立即重连时，新 handler 可能已经用同一 UUID
+     * 登记；旧连接的迟到 {@code onDisconnect} 不能把新 handler 一并删掉，
+     * 否则新会话会变成管理视图里看不见、也踢不掉的幽灵。</p>
+     */
+    public void unregister(UUID uuid, LoginSessionHandler handler) {
+        residents.remove(uuid, handler);
     }
 
     /** 按游戏 ID（大小写不敏感）查找仍在 limbo 的玩家。 */
@@ -152,8 +159,7 @@ public final class LimboLoginService implements LimboResidents {
             return false;
         }
         // 断开路径会触发 onDisconnect → unregister，这里只负责调用。
-        handler.timeOutNow(message);
-        return true;
+        return handler.timeOutNow(message);
     }
 
     /**

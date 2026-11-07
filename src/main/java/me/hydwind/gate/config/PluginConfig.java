@@ -113,8 +113,9 @@ public record PluginConfig(
      * 解析配置。
      *
      * <p>校验失败一律抛出 {@link IllegalArgumentException}，不做静默回退：
-     * {@code website.base-url} 为空、超时非正、auth 时限非正、重启参数非法都会
-     * 让本次加载失败。只有“缺项”或“无法解析的字符串”才使用默认值。</p>
+     * {@code website.base-url} 为空或非法、超时非正、auth 时限非正、重启参数非法、
+     * 数值字段写成无法解析的字符串，都会让本次加载失败。只有“缺项”、
+     * {@code null} 或非字符串非数字类型才使用默认值；空白文本字段回退默认值。</p>
      */
     public static PluginConfig from(Map<String, Object> root, String environmentToken) {
         Objects.requireNonNull(root, "root");
@@ -151,9 +152,7 @@ public record PluginConfig(
                         restartDefaults.requestFile().toString())),
                 seconds(restartSection, "cooldown-seconds", restartDefaults.cooldown()),
                 seconds(restartSection, "window-seconds", restartDefaults.window()),
-                YamlMaps.intValue(restartSection, "max-per-hour",
-                        YamlMaps.intValue(restartSection, "max-per-window",
-                                restartDefaults.maxPerWindow())));
+                maxPerWindow(restartSection, restartDefaults.maxPerWindow()));
 
         return new PluginConfig(
                 website,
@@ -166,6 +165,19 @@ public record PluginConfig(
                 new ServerSettings(
                         YamlMaps.text(serverSection, "main", DEFAULT_MAIN_SERVER)),
                 restart);
+    }
+
+    /**
+     * 读取滚动窗口内的重启上限。
+     *
+     * <p>优先 {@code max-per-hour}，只有它缺项时才读取旧别名 {@code max-per-window}；
+     * 旧别名如果存在但无法解析，不应让一个已合法配置的新键启动失败。</p>
+     */
+    private static int maxPerWindow(Map<String, Object> section, int fallback) {
+        if (section.containsKey("max-per-hour")) {
+            return YamlMaps.intValue(section, "max-per-hour", fallback);
+        }
+        return YamlMaps.intValue(section, "max-per-window", fallback);
     }
 
     /** 读取秒数并转成 {@link Duration}；缺项或无法解析时用 {@code fallback}。 */

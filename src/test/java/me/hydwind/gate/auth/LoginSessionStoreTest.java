@@ -396,11 +396,18 @@ class LoginSessionStoreTest {
 
         List<LoginSession> secondSweep = store.timeOutAll(START.plusSeconds(60).plus(LOGIN_TIMEOUT));
 
-        assertEquals(1, secondSweep.size());
-        assertEquals(SECOND, secondSweep.getFirst().uuid());
+        // PLAYER 仍是 TIMED_OUT 且未被清理，会继续出现在结果里：sweep 必须能
+        // 一直重试直到真的把玩家断开或会话被移除。
+        assertEquals(2, secondSweep.size());
+        assertTrue(secondSweep.stream().anyMatch(session -> session.uuid().equals(PLAYER)));
+        assertTrue(secondSweep.stream().anyMatch(session -> session.uuid().equals(SECOND)));
         assertEquals(LoginSession.Status.TIMED_OUT, store.find(SECOND).orElseThrow().status());
+
+        // 模拟 sweep 处理完：移除两个已超时会话后，扫描不再重复返回。
+        assertTrue(store.removeIfTimedOut(PLAYER));
+        assertTrue(store.removeIfTimedOut(SECOND));
         assertTrue(store.timeOutAll(START.plusSeconds(60).plus(LOGIN_TIMEOUT)).isEmpty(),
-                "同一会话不应重复返回");
+                "已清理的超时会话不应重复返回");
     }
 
     @Test
@@ -477,5 +484,95 @@ class LoginSessionStoreTest {
     void loginSessionRejectsNullDeadline() {
         assertThrows(NullPointerException.class, () -> new LoginSession(
                 PLAYER, "PlayerOne", IP, LoginSession.Status.PENDING, START, START, null, null, 0L));
+    }
+
+    // ---------------------------------------------------------------------
+    // 回归：超时入口竞争时不能让玩家永久留在 limbo。
+    // ---------------------------------------------------------------------
+
+    @Test
+    void timeOutAllReturnsTimedOutSessionsMarkedByALateVerificationResult() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        long id = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+        Instant afterDeadline = START.plus(LOGIN_TIMEOUT).plusNanos(1);
+
+        assertFalse(store.authenticationSucceeded(PLAYER, id, afterDeadline),
+                "超过 deadline 的迟到成功结果不得放行");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(PLAYER).orElseThrow().status(),
+                "迟到的成功结果应把会话落为 TIMED_OUT");
+
+        // 这个 TIMED_OUT 不是由 timeOutAll 迁移的，也没有任何 sweep 处理过它。
+        // 下一次扫描必须仍然返回它，否则没有组件负责断开玩家。
+        List<LoginSession> sweep = store.timeOutAll(afterDeadline.plusSeconds(1));
+        assertEquals(1, sweep.size(),
+                "已被其它入口标记为 TIMED_OUT 但尚未清理的会话，必须由下一次 timeOutAll 返回");
+        assertEquals(PLAYER, sweep.getFirst().uuid());
+        assertEquals(LoginSession.Status.TIMED_OUT, sweep.getFirst().status());
+        assertEquals(START.plus(LOGIN_TIMEOUT), sweep.getFirst().loginDeadline());
+
+        assertTrue(store.removeIfTimedOut(PLAYER), "sweep 处理完后应能清掉这个滞留会话");
+        assertTrue(store.timeOutAll(afterDeadline.plusSeconds(2)).isEmpty(),
+                "已清理的滞留会话不应再次出现在扫描结果里");
+        assertTrue(store.find(PLAYER).isEmpty(), "清理后会话必须真正从 store 中消失");
+    }
+
+    @Test
+    void removeIfTimedOutKeepsTheFreshSessionCreatedByAReconnect() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        long id = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+        Instant afterDeadline = START.plus(LOGIN_TIMEOUT).plusNanos(1);
+        assertFalse(store.authenticationSucceeded(PLAYER, id, afterDeadline),
+                "超过 deadline 的成功结果不得放行");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(PLAYER).orElseThrow().status());
+
+        // 玩家在 sweep 拿到旧快照之后重连，建立同 UUID 的全新 PENDING 会话。
+        Instant rejoinAt = afterDeadline.plusSeconds(10);
+        LoginSession rejoined = join(store, PLAYER, "PlayerOne", rejoinAt);
+        assertEquals(LoginSession.Status.PENDING, rejoined.status(),
+                "超时后重连必须建立全新的 PENDING 会话");
+        assertEquals(rejoinAt, rejoined.enteredAt());
+        assertEquals(rejoinAt.plus(LOGIN_TIMEOUT), rejoined.loginDeadline());
+
+        assertFalse(store.removeIfTimedOut(PLAYER),
+                "sweep 持有的旧快照不能删掉玩家重连后建立的新会话");
+        LoginSession survivor = store.find(PLAYER).orElseThrow();
+        assertEquals(LoginSession.Status.PENDING, survivor.status(), "新会话必须仍然存在");
+        assertEquals(rejoinAt, survivor.enteredAt(), "保留下来的必须正是重连建立的新会话");
+        assertTrue(store.timeOutAll(rejoinAt).isEmpty(),
+                "新会话尚未到自己的 deadline，不应被超时扫描命中");
+    }
+
+    @Test
+    void expireGraceReclaimsVerificationCountersOnlyAfterTwentyFourHours() {
+        LoginSessionStore store = newStore();
+        Duration retention = Duration.ofHours(24);
+
+        join(store, PLAYER, "PlayerOne", START);
+        long firstId = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+        store.quit(PLAYER, START.plusSeconds(2));
+        join(store, PLAYER, "PlayerOne", START.plusSeconds(3));
+        long secondId = store.beginVerification(PLAYER, START.plusSeconds(4)).orElseThrow();
+        store.quit(PLAYER, START.plusSeconds(5));
+        assertEquals(1L, firstId);
+        assertEquals(2L, secondId, "24 小时内校验编号必须继续单调递增");
+
+        // 距最后一次使用 24 小时还差 1 秒：回收不得提前发生，迟到结果仍可能到达。
+        Instant justInsideRetention = START.plus(retention).plusSeconds(3);
+        assertEquals(0, store.expireGrace(justInsideRetention));
+        join(store, PLAYER, "PlayerOne", justInsideRetention);
+        long thirdId = store.beginVerification(PLAYER, justInsideRetention.plusSeconds(1)).orElseThrow();
+        store.quit(PLAYER, justInsideRetention.plusSeconds(2));
+        assertEquals(3L, thirdId,
+                "保留期内 expireGrace 不得回收编号条目，否则旧连接的迟到结果会命中新会话");
+
+        // 超过 24 小时未使用：条目应被回收，下一次分配从 1 重新开始。
+        Instant afterRetention = justInsideRetention.plus(retention).plusSeconds(10);
+        assertEquals(0, store.expireGrace(afterRetention));
+        join(store, PLAYER, "PlayerOne", afterRetention);
+        long reclaimedId = store.beginVerification(PLAYER, afterRetention.plusSeconds(1)).orElseThrow();
+        assertEquals(1L, reclaimedId,
+                "超过 24 小时未使用的编号条目应被 expireGrace 回收，新分配必须从 1 重新开始");
     }
 }

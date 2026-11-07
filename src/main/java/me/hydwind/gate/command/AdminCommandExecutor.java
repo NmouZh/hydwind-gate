@@ -113,6 +113,11 @@ public final class AdminCommandExecutor {
                 health = HealthResult.unhealthy();
             }
 
+            if (!health.healthy() && !health.transportFailure()) {
+                plugin.logger().warn("Health endpoint returned an unexpected response; "
+                        + "treated as contract mismatch, not restarting.");
+            }
+
             Instant now = plugin.clock().instant();
             List<String> limboPlayerNames = residents.all().stream()
                     .map(LimboResidents.Resident::gameId)

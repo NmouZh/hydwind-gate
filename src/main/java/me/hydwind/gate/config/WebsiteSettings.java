@@ -43,6 +43,12 @@ public record WebsiteSettings(
             throw new IllegalArgumentException(
                     "website.base-url must use http or https: " + baseUrl);
         }
+        // 客户端用字符串拼接追加 /api/... 路径；query 或 fragment 会把接口路径并进
+        // query，导致所有请求都打到错误的 URL 上。路径本身是允许的。
+        if (baseUri.getRawQuery() != null || baseUri.getRawFragment() != null) {
+            throw new IllegalArgumentException(
+                    "website.base-url must not contain a query or fragment: " + baseUrl);
+        }
         if (connectTimeoutMillis <= 0) {
             throw new IllegalArgumentException("website.connect-timeout-millis must be positive");
         }

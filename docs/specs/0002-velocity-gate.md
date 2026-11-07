@@ -10,7 +10,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 
 - `LoginLimboRegisterEvent` 判断玩家是否需要认证；需要则用 LimboAPI 创建虚拟 limbo 并把玩家放进去。
 - limbo 内通过 Adventure 发送聊天/标题/可点击网址，说明「打开 `/gate` 登录，然后 `/login <码>`」。
-- `LimboSessionHandler#onChat` 解析 `/login <码>`（LimboAPI 会吞掉聊天和命令，不经过 Velocity CommandManager），交给 `flow/LoginFlow.submit`，由它调用网站 `/api/plugin/login/verify`。
+- `LimboSessionHandler#onChat` 解析 `/login <码>`（LimboAPI 会吞掉聊天和命令，不经过 Velocity CommandManager），交给 `flow/LoginFlow.submit` 解析并推进状态；成功进入 VERIFYING 后由 Handler 异步调用 `LoginFlow.verify`（网站请求在 verify 内）。
 - 成功：记录会话，`LimboPlayer#disconnect(主服)`；失败：提示原因；5 分钟未登录踢出。
 - 网站 API 不变；复用 `WebsiteClient`、`LoginCode`（原 `KaomojiCode`）、`LoginSessionStore`、`RestartPolicy`、`RestartTrigger`。
 - 登录决策集中到 `flow/LoginFlow`，管理操作集中到 `admin/AdminActionService`，命令语法集中到 `command/CommandGrammar`；运行时代际由 `RuntimeHolder` 整体替换。
@@ -59,7 +59,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 ### 平台与版本
 
 - Velocity 4.1.2+（最新 4.1.x）、Java 25、Minecraft 26.3（协议 777）。
-- 启动时检查 `proxy.getVersion().getVersion()` 至少 4.1.2，并用 `compat/LimboCompat` 读取已安装 `limboapi` 插件的实际版本；缺失或低于 1.2.0 时记录明确错误并关闭代理（Velocity 没有运行时禁用插件的 API），不静默继续。
+- 启动时检查 `proxy.getVersion().getVersion()` 至少 4.1.2，并用 `compat/LimboCompat` 读取已安装 `limboapi` 插件的实际版本。插件声明 `@Dependency(id = "limboapi")`，未安装 LimboAPI 时 Velocity 拒绝加载本插件，代理本身继续运行（此时没有门禁，运维必须确认插件实际加载）；已加载但低于 1.2.0 时，启动检查记录明确错误并关闭代理（Velocity 没有运行时禁用插件的 API），不静默继续。
 - `compat/VersionCompat` 只做版本比较（忽略 `-SNAPSHOT` 等后缀）；`LimboCompat` 在其上定义最低 LimboAPI 版本 `1.2.0` 并读取构建期写入的版本资源。
 - LimboAPI 最低 1.2.0；与 Velocity 版本强绑定，升级 Velocity 前必须同步升级 LimboAPI。
 - 插件元数据：`@Plugin(id = "hydwind-gate", dependencies = { @Dependency(id = "limboapi") })`，生成 `velocity-plugin.json`。
@@ -72,7 +72,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 - 构建时用 Gradle 任务下载该 jar 到 `build/limboapi/`，以 `compileOnly(files(...))` 引用；不要 shade。
 - 下载后用 GitHub Release API 公布的 SHA-256（`25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31`）校验，不匹配时构建失败。
 - 固定 URL 与版本；若后续 Elytrium Maven 发布 1.2.0，切换为 `net.elytrium.limboapi:api:1.2.0`。
-- 运行期必须安装 `limboapi-1.2.0.jar` 或更高版本；缺失时插件因依赖缺失不加载，低于 1.2.0 时启动版本检查记录错误并关闭代理。
+- 运行期必须安装 `limboapi-1.2.0.jar` 或更高版本；缺失时插件因依赖缺失不加载（代理继续运行，但没有门禁），低于 1.2.0 时启动版本检查记录错误并关闭代理。
 
 ### 登录流程
 
@@ -90,11 +90,11 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 ### 流程编排与模块边界
 
 - `flow/LoginFlow`：纯逻辑，不 import Velocity/LimboAPI。构造函数接收 `LoginSessionStore`、`WebsiteClient`、`Messages`、`Clock`；`submit` 解析 `LoginCommand` 并推进会话状态，`verify` 调用网站并把结果应用到会话，`timeout` 使用会话自己的截止时刻。`LoginSessionHandler` 只保留发消息、转服、断开、提示调度等平台动作。
-- `SubmitKind` / `SubmitResult` / `VerifyOutcome`：提交分类为 `IGNORED`、`EMPTY_CODE`、`TOO_LONG`、`ALREADY_AUTHENTICATED`、`VERIFYING`、`REJECTED`；`submit` 成功时携带 `verificationId` 与归一化后的码；`verify` 返回是否放行、是否触发受控重启、是否契约不兼容与文案。`LoginFlow` 不会替 Adapter 补建会话，会话必须由进服流程创建。
+- `SubmitKind` / `SubmitResult` / `VerifyOutcome`：提交分类为 `IGNORED`、`EMPTY_CODE`、`TOO_LONG`、`ALREADY_AUTHENTICATED`、`VERIFYING`、`REJECTED`；`submit` 成功时携带 `verificationId` 与归一化后的码；`verify` 返回是否放行、是否触发受控重启、是否契约不兼容、文案与网站校验状态（供 Adapter 在 401/契约不匹配时记录 WARN）。`LoginFlow` 不会替 Adapter 补建会话，会话必须由进服流程创建。
 - `auth/LoginSession`：在 record 末尾新增 `loginDeadline`（进服时固定，宽限恢复沿用原值）与 `verificationId`（每次 `beginVerification` 递增，`0` 表示尚未提交）。`authenticationSucceeded` / `authenticationFailed` 只接受 `VERIFYING` 且编号匹配的结果，迟到结果被丢弃。
 - `admin/AdminActionService`：编排 approve / kick；`login/LimboResidents` 是 limbo 玩家的窄接口（由 `LimboLoginService` 实现）。approve 先 `forceAuthenticate`，再按 resident 是否存在决定是否转服；kick 先 `sessions.remove`，再踢 limbo 或后端在线玩家。`AdminCommandExecutor` 只把 `AdminResult` 映射成文案。
 - `command/CommandGrammar`：`/hydwind` 子命令语法的唯一来源；`SPECS`、`parseLine`、`parseArgs`、`suggestSubcommands`、`requiresTarget` 全部从同一份定义派生。`AdminCommandRequest.Type` 删除 `NONE`，limbo 侧用 `Optional` 表示“不是我的命令”；`HydwindCommand` 的补全由 `SPECS` 派生，权限谓词只在一处判断，执行器 switch 穷尽所有类型。
-- `runtime/RuntimeSnapshot` + `runtime/RuntimeHolder`：快照包含 `PluginConfig`、`Messages`、`WebsiteClient`、`RestartTrigger`。`RuntimeHolder` 用一次 `AtomicReference` 替换发布新代际并返回旧代际；读取方在单次操作内只取一次快照。`HttpWebsiteClient` 实现 `AutoCloseable`，关闭时释放内部 `HttpClient`。
+- `runtime/RuntimeSnapshot` + `runtime/RuntimeHolder`：快照包含 `PluginConfig`、`Messages`、`WebsiteClient`、`RestartTrigger`。`RuntimeHolder` 用一次 `AtomicReference` 替换发布新代际并返回旧代际；读取方在单次操作内只取一次快照。`HttpWebsiteClient` 实现 `AutoCloseable`，关闭时标记代际失效；不调用阻塞的 `HttpClient.close()`，连接池随代际被 GC 回收。
 
 ### 会话与失败策略
 
@@ -105,8 +105,8 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 - 401/令牌错误：日志告警，按服务异常处理，不触发重启。
 - 403（`FORBIDDEN`）与 404（`NOT_FOUND`）是明确失败结果：显示对应文案，不触发健康检查或受控重启。
 - 409 只在 `reason` 为 `invalid_code`、`expired`、`used`、`game_id_mismatch` 时按业务失败处理；未知或缺失 `reason`、畸形 body 视为契约不兼容。
-- 200 但 `ok=false`、缺少 `account` 或响应体畸形：视为契约不兼容（`CONTRACT_MISMATCH`），提示「认证服务配置异常」，不触发重启。其余非预期状态码（不含 5xx）同样按契约不兼容处理；5xx 按传输层不可达处理。
-- 健康检查 200 但 `ok` 不为 true、或健康响应体畸形：`HealthResult#unhealthyContract`，只告警，不触发受控重启。
+- 200 但 `ok=false`、缺少 `account` 或响应体畸形：视为契约不兼容（`CONTRACT_MISMATCH`），提示「认证服务配置异常」，不触发重启。verify 返回的其余非预期状态码（不含 5xx）同样按契约不兼容处理；verify 的 5xx 按传输层不可达处理。
+- 健康检查非 200（含 5xx），或 200 但 `ok` 不为 true、响应体畸形：`HealthResult#unhealthyContract`，只告警，不触发受控重启。
 - `invalid_code` 文案提示没有账号的玩家到 QQ 群私聊机器人注册游戏 ID。
 
 ### 网站接口
@@ -125,7 +125,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
   - `restart.request-path`、`restart.cooldown-seconds`、`restart.max-per-hour`、`restart.window-seconds`
   - `admin.permission`（默认 `hydwind.admin`）
   - `messages`（网址、提示、错误、超时）
-- 新增窄设置 record `WebsiteSettings`、`AuthSettings`、`LimboSettings`、`AdminSettings`、`ServerSettings`，由 `PluginConfig#website()`、`auth()`、`limbo()`、`admin()`、`server()` 暴露；`restart` 继续使用 `RestartSettings`。校验集中在配置构造阶段（`PluginConfig` 及其窄设置 record）：base-url 非空、超时与时长均为正；非法值让启动或 reload 失败，不再静默回退默认值。`HttpWebsiteClient` 不再自行做 `positiveOrDefault` 兜底。
+- 新增窄设置 record `WebsiteSettings`、`AuthSettings`、`LimboSettings`、`AdminSettings`、`ServerSettings`，由 `PluginConfig#website()`、`auth()`、`limbo()`、`admin()`、`server()` 暴露；`restart` 继续使用 `RestartSettings`。校验集中在配置构造阶段（`PluginConfig` 及其窄设置 record）：`website.base-url` 为空、非法 URI 或非 http/https，超时 ≤ 0，无法解析的数值字符串，`auth` 三个时限 ≤ 0，`restart` 的冷却/窗口 ≤ 0 或 `max-per-hour` 为负时，启动或 reload 失败。空白文本字段（`health-path`、`permission`、`limbo.world` / `limbo.spawn`、`server.main`、`restart.request-path`）、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只记录 WARN 并使用默认出生点。`HttpWebsiteClient` 不再自行做 `positiveOrDefault` 兜底。
 - `LimboLoginService` 在 `initialize` 时持有生效的 `limbo` 设置副本，供日志/状态使用；reload 只比较并告警，不重建 limbo。
 - `/hydwind reload` 重载，保留进行中的会话与 `RestartPolicy` 计数；reload 构建完整的 `RuntimeSnapshot` 后一次 `publish`，再关闭旧代际；reload 方法加 `synchronized`。
 - 超时在会话创建时固定：`auth.session-grace-seconds` 立即生效；`auth.prompt-interval-seconds` 与 `auth.login-timeout-seconds` 只对之后进入 limbo 的会话生效。reload 调大 `auth.login-timeout-seconds` 不会延长已进服玩家的截止时刻，旧会话仍按原定时间被踢。
@@ -157,7 +157,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 ## Testing Decisions
 
 - **最高接缝（HTTP 契约）**：`POST /api/plugin/login/verify`、`GET /api/health`。`WebsiteClient` 对本地 `com.sun.net.httpserver.HttpServer` 桩测试 200/401/403/404/409/429/超时/连接拒绝，并覆盖 200 畸形 body、200 `ok=false`、缺 `account`、409 未知 `reason` 的 `CONTRACT_MISMATCH` 分类。
-- **编排层（测试替身）**：`LoginFlowTest` 覆盖成功、错误码、超时、迟到结果、重复提交、管理员放行后的 onSpawn 决策；`AdminActionServiceTest` 覆盖仅在 limbo、仅会话、两者都有、都不存在及 approve/kick 的顺序不变量；`CommandGrammarTest` 覆盖解析、补全与 `requiresTarget` 一致性；`RuntimeHolderTest` 覆盖发布后代际可见、旧代际关闭与重复关闭安全。
+- **编排层（测试替身）**：`LoginFlowTest` 覆盖成功、错误码、超时、迟到结果、重复提交；onSpawn 的提前放行与 register 后复查由 manual-test 的时序用例覆盖（尚无自动化）。`AdminActionServiceTest` 覆盖仅在 limbo、仅会话、两者都有、都不存在及 approve/kick 的顺序不变量；`CommandGrammarTest` 覆盖解析、补全与 `requiresTarget` 一致性；`RuntimeHolderTest` 覆盖发布后代际可见、旧代际关闭与重复关闭安全。
 - **纯逻辑**：`LoginCode` 归一化（登录码与备用码）、`LoginSessionStore` 状态、宽限与 `loginDeadline`（含 reload 后旧会话不变、`verificationId` 归属）、`RestartPolicy` 冷却与上限、`RestartTrigger` 契约不兼容不触发重启、配置窄视图与集中校验、Velocity/LimboAPI 版本比较、共享命令行/模板工具。JUnit 5。
 - **测试约束**：所有测试只穿过 Module 的 Interface，不直接调用 package-private 映射函数；真实 limbo 客户端交互不在自动化测试范围内。
 - **Limbo 集成**：真实 limbo 客户端交互仍手工验证（进 limbo、可点击 URL、真实客户端聊天/命令吞并、转服、断线宽限、真实网络故障）；`LoginFlow` / `AdminActionService` / `CommandGrammar` / `RuntimeHolder` 等编排用测试替身自动化，不重复手工验证。

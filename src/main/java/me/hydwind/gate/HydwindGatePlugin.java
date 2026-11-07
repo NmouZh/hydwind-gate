@@ -235,8 +235,9 @@ public final class HydwindGatePlugin {
             String message = messages().sessionTimeout();
             for (LoginSession session : timedOut) {
                 if (!limboLoginService.timeOut(session.uuid(), message)) {
-                    // 不在 limbo（已断线或已转服）时只需清掉过期会话。
-                    sessionStore.remove(session.uuid());
+                    // 不在 limbo 时只需清掉过期会话；用状态比较避免删掉玩家在
+                    // timeOutAll 之后重连建立的崭新会话。
+                    sessionStore.removeIfTimedOut(session.uuid());
                 }
             }
         }

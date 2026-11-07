@@ -84,16 +84,16 @@ public final class LoginFlow {
             if (!sessions.authenticationSucceeded(identity.uuid(), verificationId, clock.instant())) {
                 // 会话已超时、已断线或编号不匹配：迟到的成功结果不得放行，
                 // 也不再向玩家播报成功文案。
-                return new VerifyOutcome(false, false, false, "");
+                return new VerifyOutcome(false, false, false, "", null);
             }
-            return new VerifyOutcome(true, false, false, feedback.message());
+            return new VerifyOutcome(true, false, false, feedback.message(), result.status());
         }
 
         // 失败一律退回 PENDING 允许重试；返回值只表示这次结果是否仍然有效，
         // 不影响本次给玩家的提示。
         sessions.authenticationFailed(identity.uuid(), verificationId, clock.instant());
         return new VerifyOutcome(false, feedback.triggerRestart(),
-                isContractMismatch(result.status()), feedback.message());
+                isContractMismatch(result.status()), feedback.message(), result.status());
     }
 
     /** 会话自己的登录截止时刻已到：标记 TIMED_OUT。 */

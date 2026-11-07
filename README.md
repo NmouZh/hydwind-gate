@@ -16,12 +16,12 @@
 
 - 单个 Velocity 插件；Paper/Bukkit 依赖与对话框、冻结相关代码已删除。
 - 登录决策集中在 `flow/LoginFlow`（`submit` / `verify` / `timeout`）；`LoginSessionHandler` 只负责发消息、转服、断开与提示调度。limbo 内的 `/login` 文本解析仍由 `login/LoginCommand` 负责。
-- 会话进服时固定自己的 `loginDeadline`；每次提交分配 `verificationId`，迟到或重复的网站结果会被丢弃。60 秒维护任务按各会话 deadline 兜底超时。
-- 配置按 `website` / `auth` / `limbo` / `admin` / `server` 五组映射为窄设置 record（`restart` 继续用 `RestartSettings`）；启动与 reload 集中校验，非法值直接失败，不再静默回退默认值。
+- 会话进服时固定自己的 `loginDeadline`；每次成功进入验证（PENDING → VERIFYING）时分配 `verificationId`，编号按玩家 UUID 跨会话单调递增（重连后不从 1 重来），迟到或重复的网站结果会被丢弃。60 秒维护任务按各会话 deadline 兜底超时。
+- 配置按 `website` / `auth` / `limbo` / `admin` / `server` 五组映射为窄设置 record（`restart` 继续用 `RestartSettings`）；启动与 reload 集中校验：base-url/URI、超时、无法解析的数值字符串、auth 时限、restart 数值非法时直接失败，空白文本字段与缺失项回退默认值，畸形 `limbo.spawn` 只告警。
 - reload 构建完整的 `RuntimeSnapshot` 后整体替换，旧代际关闭；进行中的会话与重启计数保留。
 - `/hydwind` 的解析、补全与目标判断统一由 `CommandGrammar` 提供；approve / kick 由 `AdminActionService` 编排，先写会话再转服或断开。
-- 网站响应新增 `CONTRACT_MISMATCH` 分类；只有传输层失败才触发受控重启，契约不兼容只告警。
-- 启动时校验 LimboAPI 版本（最低 1.2.0）与 Velocity 版本；不满足或缺失时记录错误并关闭代理。
+- 网站响应新增 `CONTRACT_MISMATCH` 分类；verify 的 5xx 属于传输层失败，health 的非 200 属于契约不兼容；只有传输层失败才可能触发受控重启，契约不兼容只告警。
+- 启动时校验 LimboAPI 版本（最低 1.2.0）与 Velocity 版本；Velocity 过低或 LimboAPI 已加载但版本过低时记录错误并关闭代理。LimboAPI 缺失时插件因 Velocity 依赖机制不加载，代理继续运行但没有门禁。
 - JUnit 5 覆盖编排层（`LoginFlowTest`、`AdminActionServiceTest`、`CommandGrammarTest`、`RuntimeHolderTest`）、会话 deadline 与 `verificationId`、HTTP 契约与 `CONTRACT_MISMATCH`、配置窄视图与集中校验；真实 limbo 客户端交互按手工清单验证。
 
 ## 版本要求
@@ -31,7 +31,7 @@
 | Velocity | 4.1.2+ | 构建使用 `velocity-api:4.1.2-SNAPSHOT`；插件启动时检查版本，低于 4.1.2 会记录错误并关闭代理。升级前先确认 LimboAPI 有对应版本 |
 | Java | 25 | 构建与运行都要求 Java 25 |
 | Minecraft | 26.3（协议 777） | 客户端与后端均需 26.3；LimboAPI 1.2.0 在低于 777 的协议上会直接关闭代理 |
-| LimboAPI | 最低 1.2.0 | 独立插件，必须与 Velocity 版本配套；启动时读取实际版本，缺失或低于 1.2.0 会记录错误并关闭代理 |
+| LimboAPI | 最低 1.2.0 | 独立插件，必须与 Velocity 版本配套；未安装时 Velocity 因插件依赖拒绝加载 HydwindGate，代理继续运行但没有门禁；已加载但低于 1.2.0 会记录错误并关闭代理 |
 | 后端服务器 | Paper 26.3 | 名称需与 `velocity.toml` 的 `servers` 键、`server.main` 一致 |
 
 ## 构建
@@ -84,7 +84,7 @@ curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
 - `HydwindGate-0.1.0.jar`（本插件，来自 CI artifact）
 - `limboapi-1.2.0.jar`（LimboAPI）
 
-插件声明了 `@Dependency(id = "limboapi")`；缺少 LimboAPI 时 Velocity 会拒绝加载并给出原因。LimboAPI 本体是 AGPLv3，API 模块是 MIT，再分发时注意区别。
+插件声明了 `@Dependency(id = "limboapi")`；缺少 LimboAPI 时 Velocity 会拒绝加载本插件并给出原因，此时代理仍在运行但没有门禁，必须安装 LimboAPI 后重启并确认控制台出现 `HydwindGate ... enabled`。LimboAPI 本体是 AGPLv3，API 模块是 MIT，再分发时注意区别。
 
 ## 部署
 
@@ -99,12 +99,13 @@ curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
 - **版本强绑定**：LimboAPI 最低 1.2.0，只兼容 Velocity 4.1.2+ 与协议 777（MC 26.3）。升级 Velocity 前先确认 LimboAPI 有对应版本，否则代理会拒绝启动或直接关闭连接。
 - **令牌不要进仓库**：`website.token` 建议留空，用进程环境变量 `HYDWIND_PLUGIN_TOKEN` 注入；令牌错误时玩家看到「认证服务配置异常」，控制台有 401 告警。
 - **重启目录可写**：`restart.request-path` 的父目录必须存在且代理进程可写（默认 `/run/hydwind`）；或改到可写路径。该文件由外部 systemd `path` unit 监听，插件本身不执行重启。
-- **契约不兼容只告警**：网站有响应但响应体不符合插件契约（如 200 缺字段、409 未知 `reason`、健康体畸形）时按「认证服务配置异常」提示并记录 WARN，不写重启文件；只有传输层失败（不可达、超时、5xx）才进入受控重启判断。
+- **契约不兼容只告警**：verify 返回 200 但响应体不符合契约（缺字段、409 未知 `reason`、畸形 JSON）时按「认证服务配置异常」提示玩家并记录 WARN，不写重启文件；health 返回非 200（含 5xx）或健康体畸形同样视为契约不兼容，只告警、不触发重启。只有 verify 的传输层失败（不可达、超时、5xx）才进入受控重启判断，且仍需健康检查确认 `transportFailure=true`。
 - **主服名必须存在**：`server.main` 与 `velocity.toml` 的 `servers` 键一致；认证成功但服务器名不存在时，玩家会被断开并记录错误日志。
 - **会话只在内存**：认证会话与断线宽限不会持久化；代理重启后所有玩家需要重新登录。
 - **limbo 配置需重启**：`/hydwind reload` 会热重载网站、消息、断线宽限、重启与权限配置；`auth.prompt-interval-seconds` / `auth.login-timeout-seconds` 只对之后进入 limbo 的会话生效。登录超时在会话创建时固定为截止时刻，reload 调大不会延长已进服玩家的超时；`limbo.world` / `limbo.spawn` 的改动只在日志告警，需重启代理生效。
-- **配置校验失败即失败**：启动或 `/hydwind reload` 会集中校验配置；`website.base-url` 为空、超时/时长为 0 或负数等非法值会让启动失败或重载失败（重载失败时保留当前配置），不会静默回退默认值。
-- **启动版本检查**：启用时检查 `proxy.getVersion()` 至少为 4.1.2，并读取 `limboapi` 插件的实际版本（最低 1.2.0）；缺失或版本过低时记录明确错误并关闭代理，而不是在没有门禁的情况下继续运行。
+- **配置校验**：启动或 `/hydwind reload` 会集中校验配置。以下情况让启动或重载失败（重载失败时保留当前配置）：`website.base-url` 为空、非法 URI 或非 http/https；`website.connect-timeout-millis` / `read-timeout-millis` ≤ 0；无法解析的数值字符串；`auth` 三个时限 ≤ 0；`restart` 的冷却/窗口 ≤ 0 或 `max-per-hour` 为负。空白文本字段（`health-path`、`permission`、`limbo.world` / `limbo.spawn`、`server.main`、`restart.request-path`）、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只记录 WARN 并使用默认出生点。
+- **确认插件已启用**：每次启动后检查控制台出现 `HydwindGate ... enabled`。缺少 LimboAPI 时 Velocity 会拒绝加载本插件，代理仍会运行，但此时没有任何门禁；没有这行日志就必须先解决依赖再开放入口。
+- **启动版本检查**：启用时检查 `proxy.getVersion()` 至少为 4.1.2，并读取 `limboapi` 插件的实际版本（最低 1.2.0）。Velocity 版本过低或 LimboAPI 已加载但版本过低时记录明确错误并关闭代理。
 - **不开放额外端口**：插件只通过 HTTP(S) 访问网站，不监听任何新端口。
 - **管理员权限**：`admin.permission`（默认 `hydwind.admin`）由外部权限插件授予；未授权执行 `/hydwind` 只会收到无权限提示。
 
@@ -142,13 +143,14 @@ messages:
   # status-unverified 是 limbo 中显示的当前状态（默认「尚未认证」）。
 ```
 
-配置在启动与 `/hydwind reload` 时集中校验：`website.base-url` 为空、超时/时长为 0 或负数等非法值会让启动或重载失败（重载失败时保留当前配置），不会静默回退默认值。插件内部按 `website` / `auth` / `limbo` / `server` / `restart` / `admin` 分组提供窄配置视图。`auth.login-timeout-seconds` 在玩家进服时固化为会话截止时刻，reload 调大只影响之后进入 limbo 的会话。
+配置在启动与 `/hydwind reload` 时集中校验：`website.base-url` 为空/非法 URI、超时 ≤ 0、无法解析的数值字符串、`auth` 三个时限 ≤ 0、`restart` 数值非法会让启动或重载失败（重载失败时保留当前配置）；空白文本字段、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只告警并使用默认出生点。插件内部按 `website` / `auth` / `limbo` / `server` / `restart` / `admin` 分组提供窄配置视图。`auth.login-timeout-seconds` 在玩家进服时固化为会话截止时刻，reload 调大只影响之后进入 limbo 的会话。
 
 ## 部署前必填项
 
 - [ ] 在网站配置 `PLUGIN_TOKEN`，并在代理进程设置环境变量 `HYDWIND_PLUGIN_TOKEN`（不要写进仓库）。
 - [ ] `website.base-url` 指向可访问的网站；正式开放前切换到 TLS。
 - [ ] 安装 `limboapi-1.2.0.jar`（最低 1.2.0）；LimboAPI 与 Velocity 版本强绑定，升级 Velocity 前先确认兼容版本。
+- [ ] 启动后在控制台确认 `HydwindGate ... enabled`；没有这行说明插件未加载，门禁不存在。
 - [ ] 创建 `/run/hydwind` 且代理进程用户可写；或把 `restart.request-path` 改到可写路径。
 - [ ] 配置 systemd `hydwind-restart.path` + `.service`，监听重启请求文件。
 - [ ] 确认 `server.main` 与 `velocity.toml` 中的服务器名一致。
@@ -156,7 +158,7 @@ messages:
 
 ## 受控重启
 
-网站不可达时登录流程按 fail-closed 处理：玩家留在 limbo，看到「认证服务暂时不可用」。`RestartTrigger` 随即做一次健康检查；只有健康检查确认是传输层失败（不可达、超时，`transportFailure=true`）且 `RestartPolicy` 允许时才写入 `restart.request-path`。网站有响应但响应体不符合契约时只记录 WARN，不写文件。文件内容形如：
+网站不可达时登录流程按 fail-closed 处理：玩家留在 limbo，看到「认证服务暂时不可用」。`RestartTrigger` 随即做一次健康检查；只有健康检查确认是传输层失败（不可达、超时，`transportFailure=true`）且 `RestartPolicy` 允许时才写入 `restart.request-path`。网站有响应但响应体不符合契约、或 health 返回非 200 时只记录 WARN，不写文件。文件内容形如：
 
 ```text
 reason=website-unreachable

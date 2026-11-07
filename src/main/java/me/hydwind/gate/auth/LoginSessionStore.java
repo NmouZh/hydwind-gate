@@ -23,10 +23,15 @@ public final class LoginSessionStore {
 
     private final Map<UUID, LoginSession> sessions = new HashMap<>();
     /**
-     * 每个 UUID 已分配过的最大校验编号。单独存放、跨会话不重置，
+     * 每个 UUID 已分配过的最大校验编号与最后使用时刻。单独存放、跨会话不重置，
      * 这样旧连接迟到的校验结果不会命中重连后新建的会话。
+     *
+     * <p>条目在 {@link #expireGrace} 中按 {@link #VERIFICATION_ID_RETENTION} 回收，
+     * 避免长期运行的代理随独立玩家数无限增长。</p>
      */
-    private final Map<UUID, Long> lastVerificationIds = new HashMap<>();
+    private final Map<UUID, VerificationCounter> lastVerificationIds = new HashMap<>();
+    /** 校验编号的保留时长：远大于任何登录会话/断线宽限，足够覆盖迟到结果。 */
+    private static final Duration VERIFICATION_ID_RETENTION = Duration.ofHours(24);
     private volatile Duration reconnectGrace;
 
     public LoginSessionStore(Duration reconnectGrace) {
@@ -86,7 +91,11 @@ public final class LoginSessionStore {
             return OptionalLong.empty();
         }
         // 编号按 UUID 全局单调递增，不随会话重建而回到 1。
-        long verificationId = lastVerificationIds.merge(uuid, 1L, Long::sum);
+        long verificationId = lastVerificationIds
+                .compute(uuid, (key, counter) -> counter == null
+                        ? new VerificationCounter(1L, now)
+                        : new VerificationCounter(counter.lastId() + 1, now))
+                .lastId();
         sessions.put(uuid, session.transitionTo(LoginSession.Status.VERIFYING, now, verificationId));
         return OptionalLong.of(verificationId);
     }
@@ -165,15 +174,21 @@ public final class LoginSessionStore {
     }
 
     /**
-     * 批量处理超时：PENDING / VERIFYING 到达各自 {@code loginDeadline} 的会话标记为 TIMED_OUT。
-     * 供 60 秒兜底 sweep 使用，不影响已认证会话。
+     * 批量处理超时。返回所有“需要调用方断开”的会话：本次刚到期转入 TIMED_OUT 的，
+     * 以及此前已被其它入口（例如迟到的成功结果）标记为 TIMED_OUT、但还没被清理的。
      *
-     * @return 本次被标记为超时的会话
+     * <p>后者同样必须返回，否则 {@code authenticationSucceeded} 在截止后写入的
+     * TIMED_OUT 会话将没有任何组件负责断开玩家，玩家会永久留在 limbo。</p>
      */
     public synchronized List<LoginSession> timeOutAll(Instant now) {
         Objects.requireNonNull(now, "now");
         List<LoginSession> timedOut = new ArrayList<>();
         for (LoginSession session : List.copyOf(sessions.values())) {
+            if (session.status() == LoginSession.Status.TIMED_OUT) {
+                // 已标记但尚未被断开/清理：继续交给调用方处理。
+                timedOut.add(session);
+                continue;
+            }
             if (!awaitingAuthentication(session) || now.isBefore(session.loginDeadline())) {
                 continue;
             }
@@ -201,6 +216,9 @@ public final class LoginSessionStore {
                 removed++;
             }
         }
+        // 校验编号只保留有限时长，避免长期运行的代理随独立玩家数无限增长。
+        Instant idCutoff = now.minus(VERIFICATION_ID_RETENTION);
+        lastVerificationIds.entrySet().removeIf(entry -> entry.getValue().updatedAt().isBefore(idCutoff));
         return removed;
     }
 
@@ -226,8 +244,25 @@ public final class LoginSessionStore {
         return true;
     }
 
-    /** 管理员踢出：移除会话（含宽限记录）。 */
+    /**
+     * 管理员踢出：移除会话（含宽限记录）。
+     *
+     * <p>刻意保留 {@code lastVerificationIds}：踢出后玩家重连会建立新会话，
+     * 校验编号必须继续递增，否则旧连接的迟到结果会命中新会话。</p>
+     */
     public synchronized boolean remove(UUID uuid) {
+        return sessions.remove(uuid) != null;
+    }
+
+    /**
+     * 只在会话确实处于 TIMED_OUT 时移除它。60 秒 sweep 可能持有过期快照，
+     * 这期间玩家可能已重连并建立了新会话；用状态比较避免删掉新会话。
+     */
+    public synchronized boolean removeIfTimedOut(UUID uuid) {
+        LoginSession session = sessions.get(uuid);
+        if (session == null || session.status() != LoginSession.Status.TIMED_OUT) {
+            return false;
+        }
         return sessions.remove(uuid) != null;
     }
 
@@ -252,5 +287,9 @@ public final class LoginSessionStore {
                 && session.matches(gameId, ip)
                 && !now.isBefore(disconnectedAt)
                 && now.isBefore(disconnectedAt.plus(reconnectGrace));
+    }
+
+    /** 每个 UUID 的校验编号计数器；带时间戳以便回收。 */
+    private record VerificationCounter(long lastId, Instant updatedAt) {
     }
 }

@@ -146,8 +146,8 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
 ### 6. web
 
 - `VerifyResult.Status` 新增 `CONTRACT_MISMATCH`。
-- `HttpWebsiteClient`：200 但 `ok=false` / 缺 `account` / 409 未知 reason / body 畸形 → `CONTRACT_MISMATCH`；IOException / 超时 / 5xx → `UNREACHABLE`；403/404/401/429/已知 409 保持原语义。
-- `HealthResult` 增加 `boolean transportFailure`：`healthy(uptime)`、`unhealthy()`（transportFailure=true）、`unhealthyContract()`（false）。
+- `HttpWebsiteClient`：verify 请求 200 但 `ok=false` / 缺 `account` / 409 未知 reason / body 畸形 → `CONTRACT_MISMATCH`；verify 的 IOException / 超时 / 5xx → `UNREACHABLE`；403/404/401/429/已知 409 保持原语义。
+- `HealthResult` 增加 `boolean transportFailure`：`healthy(uptime)`、`unhealthy()`（transportFailure=true）、`unhealthyContract()`（false）。health 返回非 200（含 5xx）或 200 但契约不符时走 `unhealthyContract()`，不视为传输层失败。
 - `RestartTrigger` 只在 `health.transportFailure()` 时考虑受控重启。
 - `LoginFeedback`：`CONTRACT_MISMATCH` → `serviceMisconfigured`，`triggerRestart=false`。
 
@@ -166,7 +166,7 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
 
 ### 9. compat
 
-新增 `compat/LimboCompat`：最低 `1.2.0`，用 `VersionCompat.isAtLeast` 比较；插件启动时读取 `limboapi` 插件版本并校验，缺失或过低时记录错误并关闭代理。`VersionCompat` 保持纯 helper。
+新增 `compat/LimboCompat`：最低 `1.2.0`，用 `VersionCompat.isAtLeast` 比较；插件声明 `@Dependency(id = "limboapi")`，缺失时 Velocity 拒绝加载本插件（代理继续运行，但门禁不存在）；已加载但版本过低时记录错误并关闭代理。`VersionCompat` 保持纯 helper。
 
 ### 10. 清理
 
@@ -179,7 +179,7 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
 
 新增/更新：
 
-- `LoginFlowTest`：成功、错误码、超时、迟到结果、重复提交、管理员放行后的 onSpawn。
+- `LoginFlowTest`：成功、错误码、超时、迟到结果、重复提交；onSpawn 的提前放行与 register 后复查由 manual-test 的时序用例覆盖（尚无自动化）。
 - `AdminActionServiceTest`：仅在 limbo、仅会话、两者都有、都不存在。
 - `RuntimeHolderTest`：发布后代际可见、旧代际关闭。
 - `CommandGrammarTest`：解析 / 补全 / requiresTarget 一致。
@@ -205,6 +205,8 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
   `AdminActionService.BackendPlayers`（`findOnline` / `disconnect` / `nameOf`）访问后端在线玩家，
   便于用测试替身覆盖；`approve` / `kick` 额外接收 `message` 参数，由 Adapter 从当前配置取文案，
   编排层不依赖 `Messages`。
+- `VerifyOutcome` 增加 `VerifyResult.Status status`（迟到作废的成功结果为 `null`），
+  供 `LoginSessionHandler` 在 401 与 `CONTRACT_MISMATCH` 时记录 WARN。
 - 配置校验放在窄设置 record（`WebsiteSettings`、`AuthSettings`、`LimboSettings`、`AdminSettings`、
   `ServerSettings`）的紧凑构造器里，`PluginConfig` 只负责组装与转发；`HttpWebsiteClient`
   因此不再做 `positiveOrDefault` 之类的兜底。
@@ -213,3 +215,11 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
   契约不匹配（避免伪装成传输层失败）；旧连接池随代际被 GC 回收。
 - `LimboLoginService` 在 `initialize()` 时固定 `LimboSettings`，通过 `activeLimboSettings()`
   暴露给启动日志；日志同时打印配置值与生效值，二者不同时提示重启代理。
+- `LoginSessionHandler` 的提示间隔与一次性超时在构造时按会话冻结，不随 reload 重排；
+  其余路径在每次操作开始时取当前代际。修复前的提交/超时路径也使用进服时冻结的会话配置，
+  该偏差已按下面的修复项改为当前代际。
+- 60 秒维护任务除 `sessionStore.timeOutAll(now)` 外，还对每个被标记超时的会话调用
+  `LimboLoginService.timeOut(uuid, message)` 主动断开仍在 limbo 的玩家；玩家已不在 limbo
+  （已断线或已转服）时改为 `sessionStore.remove(uuid)` 清理过期会话；随后照常执行 `expireGrace`。
+- 已有 limbo 会话的提交/超时文案在修复后随当前代际，使 `/hydwind reload` 的新文案
+  对已有 limbo 会话同样生效。

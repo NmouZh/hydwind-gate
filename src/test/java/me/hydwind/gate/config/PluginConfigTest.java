@@ -372,4 +372,65 @@ class PluginConfigTest {
         assertThrows(NullPointerException.class,
                 () -> new PluginConfig(website, auth, limbo, admin, server, null));
     }
+
+    // ---------------------------------------------------------------------
+    // 回归：旧别名惰性读取与 base-url 的 query/fragment 校验。
+    // ---------------------------------------------------------------------
+
+    @Test
+    void unparsableLegacyMaxPerWindowIsIgnoredWhenMaxPerHourIsValid() {
+        Map<String, Object> root = Map.<String, Object>of(
+                "website", Map.<String, Object>of("base-url", "http://example.test"),
+                "restart", Map.<String, Object>of(
+                        "max-per-hour", 5,
+                        "max-per-window", "2 次"));
+
+        PluginConfig config = PluginConfig.from(root, null);
+
+        assertEquals(5, config.restart().maxPerWindow(),
+                "max-per-hour 合法时，未被读取的旧别名即使无法解析也不应让启动失败");
+    }
+
+    @Test
+    void validLegacyMaxPerWindowStillAppliesWhenMaxPerHourIsAbsent() {
+        Map<String, Object> root = Map.<String, Object>of(
+                "website", Map.<String, Object>of("base-url", "http://example.test"),
+                "restart", Map.<String, Object>of("max-per-window", 4));
+
+        assertEquals(4, PluginConfig.from(root, null).restart().maxPerWindow(),
+                "只有旧别名时仍必须按旧别名生效");
+
+        // 边界：旧别名是新键缺项时唯一的来源，无法解析时仍应按原语义让加载失败，
+        // 而不是被惰性读取一并吞掉。
+        assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
+                Map.of("website", Map.of("base-url", "http://example.test"),
+                        "restart", Map.of("max-per-window", "2 次")), null),
+                "没有合法的新键可依据时，无法解析的旧别名仍必须报错");
+    }
+
+    @Test
+    void websiteBaseUrlRejectsQueryAndFragmentButAcceptsPlainPaths() {
+        IllegalArgumentException query = assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("https://example.com/mc?tenant=x", "token", 100, 100, "/api/health"),
+                "query 会让后续拼接的 /api 路径失效，必须在加载时拒绝");
+        assertTrue(query.getMessage().contains("query"),
+                "错误信息应明确指出 query 问题");
+
+        IllegalArgumentException fragment = assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("https://example.com/mc#frag", "token", 100, 100, "/api/health"),
+                "fragment 不应出现在网站根地址中，必须在加载时拒绝");
+        assertTrue(fragment.getMessage().contains("fragment"),
+                "错误信息应明确指出 fragment 问题");
+
+        assertEquals("https://example.com/mc",
+                new WebsiteSettings("https://example.com/mc", "token", 100, 100, "/api/health").baseUrl(),
+                "不带尾斜杠的普通路径必须通过");
+        assertEquals("https://example.com/mc/",
+                new WebsiteSettings("https://example.com/mc/", "token", 100, 100, "/api/health").baseUrl(),
+                "带尾斜杠的普通路径必须通过");
+
+        assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
+                Map.of("website", Map.of("base-url", "https://example.com/mc?tenant=x")), null),
+                "PluginConfig.from 加载带 query 的 base-url 也必须失败");
+    }
 }

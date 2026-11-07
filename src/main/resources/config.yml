@@ -1,7 +1,11 @@
 # HydwindGate 配置（Velocity 版）。
 # 修改后可通过 /hydwind reload 热重载；进行中的登录会话不会被中断。
-# 启动与重载时集中校验：website.base-url 为空、超时/时长为 0 或负数等非法值会让
-# 启动或重载失败（重载失败时保留当前配置），不会静默回退默认值。
+# 启动与重载时集中校验：
+# - 失败：website.base-url 为空、非法 URI 或非 http/https；超时 ≤ 0；无法解析的
+#   数值字符串；auth 三个时限 ≤ 0；restart 的冷却/窗口 ≤ 0 或 max-per-hour 为负。
+# - 回退默认：空白文本字段、字段缺失、数值字段为非数字非字符串类型。
+# - 只告警：畸形 limbo.spawn（使用默认出生点）。
+# 重载失败时保留当前配置。
 # website / auth / limbo / server / admin 各组映射为插件内部的窄配置视图，
 # restart 使用 RestartSettings，messages 仍由 Messages 读取。
 # 提示间隔与登录超时在会话创建时固定：reload 调大只影响之后进入 limbo 的会话；
@@ -9,49 +13,51 @@
 
 website:
   # 网站根地址，插件据此拼接 /gate、健康检查路径与 /api/plugin/login/verify。
-  # 留空会导致启动或重载失败。
+  # 留空、非法 URI 或非 http/https 会导致启动或重载失败。
   base-url: "http://103.236.99.253:62179"
   # 网站插件令牌，与站务令牌分离。首次部署时填入。
   # 环境变量 HYDWIND_PLUGIN_TOKEN 非空时优先于此处。
   token: ""
-  # 健康检查路径（相对 base-url）。
+  # 健康检查路径（相对 base-url）；留空时回退默认值 /api/health。
   health-path: "/api/health"
-  # HTTP 连接与读取超时，单位毫秒；必须为正数，0 或负数会让启动/重载失败。
+  # HTTP 连接与读取超时，单位毫秒；必须为正数，0、负数或无法解析的数值字符串
+  # 会让启动/重载失败。
   connect-timeout-millis: 3000
   read-timeout-millis: 5000
 
 auth:
-  # PENDING / VERIFYING 会话超过该秒数会被踢出。
+  # PENDING / VERIFYING 会话超过该秒数会被踢出；必须为正。
   # 截止时刻在玩家进服时固定；reload 调大只影响之后进服的会话，旧会话仍按原时间被踢。
   login-timeout-seconds: 300
-  # 已认证玩家断线后，同 UUID + 同 IP 在此秒数内重连免登录；reload 后立即生效。
+  # 已认证玩家断线后，同 UUID + 同 IP 在此秒数内重连免登录；必须为正；reload 后立即生效。
   session-grace-seconds: 300
-  # limbo 中重复提示登录说明的间隔（秒）；reload 只影响之后进入 limbo 的会话。
+  # limbo 中重复提示登录说明的间隔（秒）；必须为正；reload 只影响之后进入 limbo 的会话。
   prompt-interval-seconds: 10
 
 limbo:
-  # LimboAPI 虚拟世界名。多个代理实例请使用不同名称。需重启代理生效。
+  # LimboAPI 虚拟世界名。多个代理实例请使用不同名称。留空回退默认值；需重启代理生效。
   world: "hydwind_limbo"
   # limbo 内玩家出生坐标，格式 "x, y, z"。需重启代理生效。
+  # 格式畸形时只记录 WARN，并使用默认出生点。
   spawn: "0, 64, 0"
 
 server:
-  # 认证成功后转服的目标服务器名（velocity.toml 中 servers 的键）。
+  # 认证成功后转服的目标服务器名（velocity.toml 中 servers 的键）；留空回退默认值 "main"。
   main: "main"
 
 restart:
   # 网站不可达且健康检查失败时写入的重启请求文件。
-  # 需要 systemd path unit 监听该文件；目录必须可写。
+  # 需要 systemd path unit 监听该文件；目录必须可写；留空回退默认路径。
   request-path: "/run/hydwind/restart-request"
-  # 两次触发之间的冷却时间。
+  # 两次触发之间的冷却时间；必须为正。
   cooldown-seconds: 600
-  # 每小时限额的滚动窗口。
+  # 每小时限额的滚动窗口；必须为正。
   window-seconds: 3600
-  # 窗口内最多触发次数；超限只记录告警。
+  # 窗口内最多触发次数；不能为负；超限只记录告警。
   max-per-hour: 2
 
 admin:
-  # /hydwind 命令所需权限，由外部权限插件授予。
+  # /hydwind 命令所需权限，由外部权限插件授予；留空回退默认值 hydwind.admin。
   permission: "hydwind.admin"
 
 messages:

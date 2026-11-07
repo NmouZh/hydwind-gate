@@ -23,8 +23,9 @@ import java.util.UUID;
  * {@link HealthResult#unhealthyContract()}，重启无意义。401/403/404 映射为
  * 明确的失败结果，由调用方按配置文案提示。</p>
  *
- * <p>实现 {@link AutoCloseable}：{@link #close()} 关闭内部 {@link HttpClient}，
- * 释放连接池与相关线程，供配置热重载时关闭旧代际。</p>
+ * <p>实现 {@link AutoCloseable}：{@link #close()} 只标记本代际失效，后续请求立即
+ * 返回契约不匹配。它刻意不调用会阻塞的 {@link HttpClient#close()}，
+ * 因为 reload 发生在代理调度线程上；连接池随旧代际失去引用后被 GC 回收。</p>
  */
 public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
 

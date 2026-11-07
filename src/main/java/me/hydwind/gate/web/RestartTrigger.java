@@ -49,8 +49,8 @@ public final class RestartTrigger {
         try {
             health = websiteClient.health();
         } catch (RuntimeException exception) {
-            logger.warn("网站健康检查异常，按传输层失败处理: {}", exception.toString());
-            health = HealthResult.unhealthy();
+            logger.warn("网站健康检查异常，跳过重启: {}", exception.toString());
+            return;
         }
 
         if (health == null) {

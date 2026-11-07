@@ -108,6 +108,7 @@ class LoginFlowTest {
         assertTrue(outcome.authenticated());
         assertFalse(outcome.triggerRestart());
         assertFalse(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.OK, outcome.status());
         assertTrue(outcome.message().contains("一号玩家"));
 
         assertEquals("SHOWME123", website.lastCode);
@@ -135,6 +136,7 @@ class LoginFlowTest {
 
         assertFalse(outcome.authenticated(), "迟到的成功结果不得放行");
         assertEquals("", outcome.message(), "迟到结果不再向玩家播报成功文案");
+        assertNull(outcome.status(), "迟到成功不应向 Adapter 暴露诊断状态");
         assertFalse(outcome.triggerRestart());
         assertFalse(outcome.contractMismatch());
         assertEquals(LoginSession.Status.TIMED_OUT, session().status());
@@ -162,6 +164,7 @@ class LoginFlowTest {
         assertFalse(outcome.authenticated());
         assertFalse(outcome.triggerRestart());
         assertFalse(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.INVALID_CODE, outcome.status());
         assertEquals(messages.invalidCode(), outcome.message());
         assertEquals(LoginSession.Status.PENDING, session().status(), "失败后应允许重新提交");
 
@@ -181,6 +184,7 @@ class LoginFlowTest {
         assertFalse(outcome.authenticated());
         assertTrue(outcome.triggerRestart());
         assertFalse(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.UNREACHABLE, outcome.status());
         assertEquals(messages.serviceUnavailable(), outcome.message());
         assertEquals(LoginSession.Status.PENDING, session().status());
     }
@@ -195,6 +199,7 @@ class LoginFlowTest {
         assertFalse(outcome.authenticated());
         assertTrue(outcome.triggerRestart(), "意外异常必须按网站不可达处理");
         assertFalse(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.UNREACHABLE, outcome.status());
         assertEquals(messages.serviceUnavailable(), outcome.message());
     }
 
@@ -208,8 +213,24 @@ class LoginFlowTest {
         assertFalse(outcome.authenticated());
         assertFalse(outcome.triggerRestart(), "契约不兼容时重启没有意义");
         assertTrue(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.CONTRACT_MISMATCH, outcome.status());
         assertEquals(messages.serviceMisconfigured(), outcome.message());
         assertEquals(LoginSession.Status.PENDING, session().status(), "失败后应允许重新提交");
+    }
+
+    @Test
+    void unauthorizedWebsiteResultIsExposedForAdapterWarningWithoutRestart() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.result = VerifyResult.unauthorized();
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated());
+        assertFalse(outcome.triggerRestart());
+        assertFalse(outcome.contractMismatch());
+        assertEquals(VerifyResult.Status.UNAUTHORIZED, outcome.status());
+        assertEquals(messages.serviceMisconfigured(), outcome.message());
+        assertEquals(LoginSession.Status.PENDING, session().status());
     }
 
     private void authenticate(VerifyResult result) {
