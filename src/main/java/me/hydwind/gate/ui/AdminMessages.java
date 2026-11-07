@@ -6,13 +6,14 @@ import me.hydwind.gate.config.YamlMaps;
 /**
  * 管理员命令文案。与玩家文案一起由 {@code config.yml} 的 {@code messages.admin} 段提供，
  * 便于服主按需改写。模板占位符：{@code {player}}、{@code {permission}}、{@code {count}}、
- * {@code {grace}}、{@code {uptime}}、{@code {remaining}}、{@code {time}}。
+ * {@code {grace}}、{@code {uptime}}、{@code {remaining}}、{@code {time}}、{@code {error}}。
  */
 public record AdminMessages(
         String noPermission,
         String usage,
         String unknownSubcommand,
         String reloaded,
+        String reloadFailed,
         String approveUsage,
         String kickUsage,
         String sessionNotFound,
@@ -21,6 +22,7 @@ public record AdminMessages(
         String approved,
         String kickedPlayer,
         String kicked,
+        String statusLimbo,
         String statusPending,
         String statusAuthenticated,
         String statusAuthenticatedGrace,
@@ -37,6 +39,7 @@ public record AdminMessages(
                 "用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>",
                 "未知子命令。用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>",
                 "配置已重载；进行中的登录会话保持不变。",
+                "配置重载失败: {error}",
                 "用法: /hydwind approve <玩家>",
                 "用法: /hydwind kick <玩家>",
                 "没有找到玩家 {player} 的登录会话。",
@@ -45,6 +48,7 @@ public record AdminMessages(
                 "已放行玩家 {player}。",
                 "你已被管理员踢出服务器。",
                 "已踢出玩家 {player} 并清理会话。",
+                "Limbo 中: {count}",
                 "待认证: {count}",
                 "已认证: {count}",
                 "已认证: {count}（其中离线宽限 {grace}）",
@@ -65,6 +69,7 @@ public record AdminMessages(
                 YamlMaps.rawString(section, "usage", defaults.usage()),
                 YamlMaps.rawString(section, "unknown-subcommand", defaults.unknownSubcommand()),
                 YamlMaps.rawString(section, "reloaded", defaults.reloaded()),
+                YamlMaps.rawString(section, "reload-failed", defaults.reloadFailed()),
                 YamlMaps.rawString(section, "approve-usage", defaults.approveUsage()),
                 YamlMaps.rawString(section, "kick-usage", defaults.kickUsage()),
                 YamlMaps.rawString(section, "session-not-found", defaults.sessionNotFound()),
@@ -73,6 +78,7 @@ public record AdminMessages(
                 YamlMaps.rawString(section, "approved", defaults.approved()),
                 YamlMaps.rawString(section, "kicked-player", defaults.kickedPlayer()),
                 YamlMaps.rawString(section, "kicked", defaults.kicked()),
+                YamlMaps.rawString(section, "status-limbo", defaults.statusLimbo()),
                 YamlMaps.rawString(section, "status-pending", defaults.statusPending()),
                 YamlMaps.rawString(section, "status-authenticated", defaults.statusAuthenticated()),
                 YamlMaps.rawString(section, "status-authenticated-grace", defaults.statusAuthenticatedGrace()),

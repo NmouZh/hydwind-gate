@@ -13,11 +13,12 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.UUID;
-import java.util.logging.Logger;
 import me.hydwind.gate.config.RestartSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 网站不可达时的受控重启触发。写入请求文件是唯一的外部副作用，
@@ -26,7 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
 class RestartTriggerTest {
 
     private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
-    private static final Logger LOGGER = Logger.getLogger("RestartTriggerTest");
+    private static final Logger LOGGER = LoggerFactory.getLogger("RestartTriggerTest");
 
     @TempDir
     Path tempDir;
