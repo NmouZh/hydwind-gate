@@ -1,111 +1,127 @@
 package me.hydwind.gate.config;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Objects;
-import org.bukkit.configuration.file.FileConfiguration;
 
 /**
- * 插件配置快照。由 {@code config.yml} 读取，热重载时整体替换。
+ * 插件配置快照。由 {@code config.yml}（SnakeYAML）读取，热重载时整体替换。
  */
 public record PluginConfig(
         String websiteBaseUrl,
         String pluginToken,
         int connectTimeoutMillis,
         int readTimeoutMillis,
+        String healthPath,
         Duration loginTimeout,
         Duration reconnectGrace,
-        SpawnPoint spawn,
-        String healthPath,
+        Duration promptInterval,
         RestartSettings restart,
-        String adminPermission
+        String adminPermission,
+        String limboWorld,
+        String limboSpawn,
+        String mainServer
 ) {
 
     /** 环境变量优先于配置文件，便于部署时不把令牌写进仓库。 */
     public static final String TOKEN_ENV = "HYDWIND_PLUGIN_TOKEN";
     public static final String DEFAULT_HEALTH_PATH = "/api/health";
     public static final String DEFAULT_ADMIN_PERMISSION = "hydwind.admin";
+    public static final Duration DEFAULT_LOGIN_TIMEOUT = Duration.ofMinutes(5);
+    public static final Duration DEFAULT_RECONNECT_GRACE = Duration.ofMinutes(5);
+    public static final Duration DEFAULT_PROMPT_INTERVAL = Duration.ofSeconds(10);
+    public static final String DEFAULT_LIMBO_WORLD = "hydwind_limbo";
+    public static final String DEFAULT_LIMBO_SPAWN = "0, 64, 0";
+    public static final String DEFAULT_MAIN_SERVER = "main";
 
-    /** 兼容 G3 时期的四参数构造器，使用默认的登录超时、宽限与出生点。 */
+    /** 兼容测试与最小配置的四参数构造器，其余字段使用默认值。 */
     public PluginConfig(String websiteBaseUrl,
                         String pluginToken,
                         int connectTimeoutMillis,
                         int readTimeoutMillis) {
         this(websiteBaseUrl, pluginToken, connectTimeoutMillis, readTimeoutMillis,
-                Duration.ofMinutes(5), Duration.ofMinutes(5), SpawnPoint.DEFAULT);
-    }
-
-    /** 兼容 G5 时期的七参数构造器。 */
-    public PluginConfig(String websiteBaseUrl,
-                        String pluginToken,
-                        int connectTimeoutMillis,
-                        int readTimeoutMillis,
-                        Duration loginTimeout,
-                        Duration reconnectGrace,
-                        SpawnPoint spawn) {
-        this(websiteBaseUrl, pluginToken, connectTimeoutMillis, readTimeoutMillis,
-                loginTimeout, reconnectGrace, spawn,
-                DEFAULT_HEALTH_PATH, RestartSettings.DEFAULT, DEFAULT_ADMIN_PERMISSION);
+                DEFAULT_HEALTH_PATH, DEFAULT_LOGIN_TIMEOUT, DEFAULT_RECONNECT_GRACE,
+                DEFAULT_PROMPT_INTERVAL, RestartSettings.DEFAULT, DEFAULT_ADMIN_PERMISSION,
+                DEFAULT_LIMBO_WORLD, DEFAULT_LIMBO_SPAWN, DEFAULT_MAIN_SERVER);
     }
 
     public PluginConfig {
         Objects.requireNonNull(websiteBaseUrl, "websiteBaseUrl");
         Objects.requireNonNull(pluginToken, "pluginToken");
+        Objects.requireNonNull(healthPath, "healthPath");
         Objects.requireNonNull(loginTimeout, "loginTimeout");
         Objects.requireNonNull(reconnectGrace, "reconnectGrace");
-        Objects.requireNonNull(spawn, "spawn");
-        Objects.requireNonNull(healthPath, "healthPath");
+        Objects.requireNonNull(promptInterval, "promptInterval");
         Objects.requireNonNull(restart, "restart");
         Objects.requireNonNull(adminPermission, "adminPermission");
+        Objects.requireNonNull(limboWorld, "limboWorld");
+        Objects.requireNonNull(limboSpawn, "limboSpawn");
+        Objects.requireNonNull(mainServer, "mainServer");
         if (healthPath.isBlank()) {
             throw new IllegalArgumentException("healthPath must not be blank");
         }
         if (adminPermission.isBlank()) {
             throw new IllegalArgumentException("adminPermission must not be blank");
         }
+        if (loginTimeout.isNegative() || loginTimeout.isZero()) {
+            throw new IllegalArgumentException("loginTimeout must be positive");
+        }
+        if (reconnectGrace.isNegative() || reconnectGrace.isZero()) {
+            throw new IllegalArgumentException("reconnectGrace must be positive");
+        }
+        if (promptInterval.isNegative() || promptInterval.isZero()) {
+            throw new IllegalArgumentException("promptInterval must be positive");
+        }
     }
 
-    public static PluginConfig from(FileConfiguration config) {
-        return from(config, System.getenv(TOKEN_ENV));
+    public static PluginConfig from(Map<String, Object> root) {
+        return from(root, System.getenv(TOKEN_ENV));
     }
 
-    public static PluginConfig from(FileConfiguration config, String environmentToken) {
-        String configToken = config.getString("website.token",
-                config.getString("website.plugin-token", ""));
+    public static PluginConfig from(Map<String, Object> root, String environmentToken) {
+        Objects.requireNonNull(root, "root");
+
+        Map<String, Object> website = YamlMaps.section(root, "website");
+        Map<String, Object> auth = YamlMaps.section(root, "auth");
+        Map<String, Object> limbo = YamlMaps.section(root, "limbo");
+        Map<String, Object> server = YamlMaps.section(root, "server");
+        Map<String, Object> restartSection = YamlMaps.section(root, "restart");
+        Map<String, Object> admin = YamlMaps.section(root, "admin");
+
+        String configToken = YamlMaps.rawString(website, "token", "").trim();
         String token = environmentToken != null && !environmentToken.isBlank()
                 ? environmentToken.trim()
-                : configToken.trim();
-
-        SpawnPoint spawn = new SpawnPoint(
-                config.getString("spawn.world", SpawnPoint.DEFAULT.world()),
-                config.getDouble("spawn.x", SpawnPoint.DEFAULT.x()),
-                config.getDouble("spawn.y", SpawnPoint.DEFAULT.y()),
-                config.getDouble("spawn.z", SpawnPoint.DEFAULT.z()),
-                (float) config.getDouble("spawn.yaw", SpawnPoint.DEFAULT.yaw()),
-                (float) config.getDouble("spawn.pitch", SpawnPoint.DEFAULT.pitch())
-        );
+                : configToken;
 
         RestartSettings defaults = RestartSettings.DEFAULT;
         RestartSettings restart = new RestartSettings(
-                java.nio.file.Path.of(config.getString("restart.request-file",
+                java.nio.file.Path.of(YamlMaps.text(restartSection, "request-path",
                         defaults.requestFile().toString())),
-                Duration.ofSeconds(Math.max(1L, config.getLong("restart.cooldown-seconds",
-                        defaults.cooldown().toSeconds()))),
-                Duration.ofSeconds(Math.max(1L, config.getLong("restart.window-seconds",
-                        defaults.window().toSeconds()))),
-                Math.max(0, config.getInt("restart.max-per-window", defaults.maxPerWindow()))
+                Duration.ofSeconds(Math.max(1L, YamlMaps.longValue(restartSection,
+                        "cooldown-seconds", defaults.cooldown().toSeconds()))),
+                Duration.ofSeconds(Math.max(1L, YamlMaps.longValue(restartSection,
+                        "window-seconds", defaults.window().toSeconds()))),
+                Math.max(0, YamlMaps.intValue(restartSection, "max-per-hour",
+                        YamlMaps.intValue(restartSection, "max-per-window", defaults.maxPerWindow())))
         );
 
         return new PluginConfig(
-                config.getString("website.base-url", "").trim(),
+                YamlMaps.rawString(website, "base-url", "").trim(),
                 token,
-                config.getInt("website.connect-timeout-millis", 3000),
-                config.getInt("website.read-timeout-millis", 5000),
-                Duration.ofSeconds(Math.max(1L, config.getLong("login.timeout-seconds", 300L))),
-                Duration.ofSeconds(Math.max(1L, config.getLong("login.reconnect-grace-seconds", 300L))),
-                spawn,
-                config.getString("website.health-path", DEFAULT_HEALTH_PATH).trim(),
+                YamlMaps.intValue(website, "connect-timeout-millis", 3000),
+                YamlMaps.intValue(website, "read-timeout-millis", 5000),
+                YamlMaps.text(website, "health-path", DEFAULT_HEALTH_PATH),
+                Duration.ofSeconds(Math.max(1L, YamlMaps.longValue(auth,
+                        "login-timeout-seconds", DEFAULT_LOGIN_TIMEOUT.toSeconds()))),
+                Duration.ofSeconds(Math.max(1L, YamlMaps.longValue(auth,
+                        "session-grace-seconds", DEFAULT_RECONNECT_GRACE.toSeconds()))),
+                Duration.ofSeconds(Math.max(1L, YamlMaps.longValue(auth,
+                        "prompt-interval-seconds", DEFAULT_PROMPT_INTERVAL.toSeconds()))),
                 restart,
-                config.getString("admin.permission", DEFAULT_ADMIN_PERMISSION).trim()
+                YamlMaps.text(admin, "permission", DEFAULT_ADMIN_PERMISSION),
+                YamlMaps.text(limbo, "world", DEFAULT_LIMBO_WORLD),
+                YamlMaps.text(limbo, "spawn", DEFAULT_LIMBO_SPAWN),
+                YamlMaps.text(server, "main", DEFAULT_MAIN_SERVER)
         );
     }
 }
