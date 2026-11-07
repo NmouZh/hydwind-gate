@@ -2,6 +2,7 @@ package me.hydwind.gate.command;
 
 import java.util.Locale;
 import java.util.Objects;
+import me.hydwind.gate.util.CommandLine;
 
 /**
  * 解析后的 {@code /hydwind} 请求。
@@ -58,29 +59,13 @@ public record AdminCommandRequest(Type type, String target) {
      * （或直接 {@code hydwind}）开头的行才返回非 {@link Type#NONE}。
      */
     public static AdminCommandRequest parseLine(String raw) {
-        if (raw == null) {
-            return new AdminCommandRequest(Type.NONE, null);
-        }
-        String trimmed = raw.strip();
-        if (trimmed.startsWith("/")) {
-            trimmed = trimmed.substring(1).strip();
-        }
-        if (trimmed.isEmpty()) {
+        CommandLine line = CommandLine.parse(raw);
+        if (line == null || !line.command().equalsIgnoreCase("hydwind")) {
             return new AdminCommandRequest(Type.NONE, null);
         }
 
-        int separator = indexOfWhitespace(trimmed);
-        String command = separator < 0 ? trimmed : trimmed.substring(0, separator);
-        if (!command.equalsIgnoreCase("hydwind")) {
-            return new AdminCommandRequest(Type.NONE, null);
-        }
-
-        String rest = separator < 0 ? "" : trimmed.substring(separator + 1).strip();
-        return rest.isEmpty() ? parseArgs() : parseArgs(rest.split("\\s+"));
-    }
-
-    public boolean needsPlayerName() {
-        return type == Type.APPROVE || type == Type.KICK;
+        String[] args = line.splitArguments();
+        return args.length == 0 ? parseArgs() : parseArgs(args);
     }
 
     private static AdminCommandRequest withTarget(Type type, String[] args) {
@@ -92,14 +77,5 @@ public record AdminCommandRequest(Type type, String target) {
         }
         String target = args[1] == null ? "" : args[1].trim();
         return new AdminCommandRequest(type, target.isEmpty() ? null : target);
-    }
-
-    private static int indexOfWhitespace(String value) {
-        for (int i = 0; i < value.length(); i++) {
-            if (Character.isWhitespace(value.charAt(i))) {
-                return i;
-            }
-        }
-        return -1;
     }
 }

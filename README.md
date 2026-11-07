@@ -18,7 +18,8 @@
 - 已移植 `WebsiteClient` / `HttpWebsiteClient`、`KaomojiCode`、`LoginSessionStore`、`RestartPolicy`、`RestartTrigger`、`PluginConfig` 与 `Messages`。
 - `config.yml` 由 SnakeYAML 读取，SnakeYAML 与 Gson 通过 Shadow 打进插件 jar。
 - `PreLoginEvent` 强制离线模式；`LoginLimboRegisterEvent` 决定宽限放行或进入 LimboAPI 虚拟 limbo。
-- limbo 内发送可点击网站链接与说明，按 `auth.prompt-interval-seconds` 重复；`onChat` 解析 `/login <码>`，成功后转 `server.main`，失败按网站 reason 提示，5 分钟未登录踢出。
+- limbo 内发送可点击网站链接、说明与「当前状态：尚未认证」，按 `auth.prompt-interval-seconds` 重复；`onChat` 解析 `/login <码>`，成功后转 `server.main`，失败按网站 reason 提示，5 分钟未登录踢出。
+- `invalid_code` 文案会提示没有账号的玩家到 QQ 群私聊机器人注册游戏 ID；429 响应带 `attemptsRemaining` 时显示剩余次数。
 - `ServerPreConnectEvent` 拒绝未认证玩家连接任何后端；断线保留 5 分钟 UUID + IP 宽限。
 - `/hydwind status|reload|approve|kick` 已实现；Velocity `CommandManager` 与 limbo `onChat` 共用同一执行器，权限由 `admin.permission` 控制。
 - JUnit 5 覆盖码归一化、会话状态机与宽限、配置解析、重启策略与触发、网站 HTTP 契约、命令解析与状态/文案；limbo 真实交互按手工清单验证。
@@ -27,7 +28,7 @@
 
 | 组件 | 版本 | 说明 |
 | --- | --- | --- |
-| Velocity | 4.1.2+ | 构建使用 `velocity-api:4.1.2-SNAPSHOT`；升级前先确认 LimboAPI 有对应版本 |
+| Velocity | 4.1.2+ | 构建使用 `velocity-api:4.1.2-SNAPSHOT`；插件启动时检查版本，低于 4.1.2 会记录错误并关闭代理。升级前先确认 LimboAPI 有对应版本 |
 | Java | 25 | 构建与运行都要求 Java 25 |
 | Minecraft | 26.3（协议 777） | 客户端与后端均需 26.3；LimboAPI 1.2.0 在低于 777 的协议上会直接关闭代理 |
 | LimboAPI | 1.2.0 | 独立插件，必须与 Velocity 版本配套 |
@@ -48,7 +49,7 @@ CI 使用 Java 25（temurin）与 Gradle 9.7.0，执行 `gradle build`（包含 
    `JUnit results: N suites, M tests, 0 failures, 0 errors, 0 skipped`。
    测试结果为 0 或任一失败都会让 CI 失败。
 2. 检查产物 jar 内含 `velocity-plugin.json`（Velocity 注解处理器生成）。
-3. 检查 `build/limboapi/limboapi-1.2.0.jar` 已被 `downloadLimboApi` 任务下载。
+3. 检查 `build/limboapi/limboapi-1.2.0.jar` 已被下载，并用 GitHub Release API 公布的 SHA-256 校验通过。
 4. 上传插件 jar 为 Actions artifact `hydwind-gate`。
 
 ### 下载构建产物
@@ -66,7 +67,8 @@ gh run download <run-id> -R NmouZh/hydwind-gate -n hydwind-gate
 构建依赖：
 
 - Velocity API：`com.velocitypowered:velocity-api:4.1.2-SNAPSHOT`（`https://repo.papermc.io/repository/maven-public/`），`compileOnly` + `annotationProcessor`。
-- LimboAPI 1.2.0：Elytrium Maven 与 JitPack 均未发布该版本，Gradle 任务从 GitHub Release 下载到 `build/limboapi/`，以 `compileOnly(files(...))` 引用，**不 shade、不打包**。
+- LimboAPI 1.2.0：Elytrium Maven 与 JitPack 均未发布该版本，Gradle 任务从 GitHub Release 下载到 `build/limboapi/`，以 `compileOnly(files(...))` 引用，**不 shade、不打包**。下载后用 Release API 公布的 SHA-256（`25582ebf...f7d31`）校验，不匹配时构建失败。
+- SnakeYAML 与 Gson 用 `implementation` + Shadow 打包进插件 jar，不依赖代理服提供。
 
 ## 安装 LimboAPI
 
@@ -99,7 +101,8 @@ curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
 - **重启目录可写**：`restart.request-path` 的父目录必须存在且代理进程可写（默认 `/run/hydwind`）；或改到可写路径。该文件由外部 systemd `path` unit 监听，插件本身不执行重启。
 - **主服名必须存在**：`server.main` 与 `velocity.toml` 的 `servers` 键一致；认证成功但服务器名不存在时，玩家会被断开并记录错误日志。
 - **会话只在内存**：认证会话与断线宽限不会持久化；代理重启后所有玩家需要重新登录。
-- **limbo 配置需重启**：`/hydwind reload` 会热重载网站、超时、提示、重启与消息配置，但 `limbo.world` / `limbo.spawn` 的改动只在日志告警，需重启代理生效。
+- **limbo 配置需重启**：`/hydwind reload` 会热重载网站、消息、断线宽限、重启与权限配置；`auth.prompt-interval-seconds` / `auth.login-timeout-seconds` 只对之后进入 limbo 的会话生效（已 spawn 的定时器不会重排）；`limbo.world` / `limbo.spawn` 的改动只在日志告警，需重启代理生效。
+- **启动版本检查**：启用时检查 `proxy.getVersion()` 至少为 4.1.2，并确认 `limboapi` 插件存在；不满足时记录明确错误并关闭代理，而不是在没有门禁的情况下继续运行。
 - **不开放额外端口**：插件只通过 HTTP(S) 访问网站，不监听任何新端口。
 - **管理员权限**：`admin.permission`（默认 `hydwind.admin`）由外部权限插件授予；未授权执行 `/hydwind` 只会收到无权限提示。
 
@@ -132,8 +135,9 @@ admin:
   permission: "hydwind.admin"
 messages:
   # 玩家与管理员可见文案，支持 {url}、{name}、{expectedGameId}、
-  # {seconds}、{player}、{permission}、{count}、{grace}、{uptime}、
-  # {remaining}、{time}、{error} 等占位符。
+  # {seconds}、{attempts}、{player}、{permission}、{count}、{grace}、{uptime}、
+  # {remaining}、{time}、{error}、{players} 等占位符。
+  # status-unverified 是 limbo 中显示的当前状态（默认「尚未认证」）。
 ```
 
 ## 部署前必填项
@@ -175,9 +179,9 @@ ExecStart=/bin/systemctl restart velocity
 
 ## 命令
 
-- `/login <登录码>`：在 limbo 中完成认证。命令由 LimboAPI 吞掉并交给 `onChat` 解析，不经过 Velocity `CommandManager`；`/login` 注册为 limbo 命令仅为客户端 Tab 补全。
-- `/hydwind status`：查看 limbo 玩家数、待认证/已认证会话、离线宽限数、网站健康、重启额度。
-- `/hydwind reload`：热重载 `config.yml`；进行中的会话与重启计数保留。
+- `/login <登录码>`：在 limbo 中完成认证。命令由 LimboAPI 吞掉并交给 `onChat` 解析，不经过 Velocity `CommandManager`；`/login` 注册为 limbo 命令仅为客户端 Tab 补全。为兼容聊天直发，不带前导 `/` 的 `login` / `hydwind` 也能识别。
+- `/hydwind status`：查看 limbo 玩家数、玩家名（最多 20 个）、待认证/已认证会话、离线宽限数、网站健康、重启额度。
+- `/hydwind reload`：热重载 `config.yml`；进行中的会话与重启计数保留，断线宽限立即更新，提示间隔与登录超时只对新会话生效。
 - `/hydwind approve <玩家>`：手动放行未认证会话并转到主服。
 - `/hydwind kick <玩家>`：清理会话并断开 limbo 或主服中的玩家。
 

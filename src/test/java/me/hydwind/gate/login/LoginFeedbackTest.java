@@ -67,6 +67,38 @@ class LoginFeedbackTest {
     }
 
     @Test
+    void rateLimitIncludesRemainingAttemptsWhenWebsiteReportsThem() {
+        LoginFeedback withRetry = LoginFeedback.from(
+                VerifyResult.rateLimited(1500L, 3), messages, "P");
+        assertEquals("尝试过多，请 2 秒后再试，剩余 3 次。", withRetry.message());
+        assertFalse(withRetry.authenticated());
+        assertFalse(withRetry.triggerRestart());
+
+        LoginFeedback withoutRetry = LoginFeedback.from(
+                VerifyResult.rateLimited(null, 0), messages, "P");
+        assertEquals("尝试过多，请稍后再试，剩余 0 次。", withoutRetry.message());
+        assertFalse(withoutRetry.triggerRestart());
+    }
+
+    @Test
+    void forbiddenAndNotFoundAreUserFacingAndDoNotRestart() {
+        LoginFeedback forbidden = LoginFeedback.from(VerifyResult.forbidden(), messages, "P");
+        assertFalse(forbidden.authenticated());
+        assertFalse(forbidden.triggerRestart(), "403 不应触发健康检查或受控重启");
+        assertEquals(messages.forbidden(), forbidden.message());
+
+        LoginFeedback notFound = LoginFeedback.from(VerifyResult.notFound(), messages, "P");
+        assertFalse(notFound.authenticated());
+        assertFalse(notFound.triggerRestart(), "404 不应触发健康检查或受控重启");
+        assertEquals(messages.notFound(), notFound.message());
+    }
+
+    @Test
+    void invalidCodeMentionsRegistrationWhenPlayerHasNoAccount() {
+        assertTrue(messages.invalidCode().contains("QQ 群私聊机器人注册 游戏ID"));
+    }
+
+    @Test
     void unreachableStaysClosedAndTriggersControlledRestart() {
         LoginFeedback feedback = LoginFeedback.from(VerifyResult.unreachable(), messages, "P");
 

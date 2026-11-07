@@ -21,7 +21,7 @@ class LoginSessionStoreTest {
 
     @Test
     void joinStartsPendingAndSuccessfulVerificationAuthenticates() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
 
         LoginSession pending = store.join(PLAYER, "PlayerOne", IP, START);
         assertEquals(LoginSession.Status.PENDING, pending.status());
@@ -44,7 +44,7 @@ class LoginSessionStoreTest {
 
     @Test
     void failedVerificationCanRetryButStaleResultCannotUndoSuccess() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         assertFalse(store.authenticationSucceeded(PLAYER, START.plusSeconds(1)));
         assertTrue(store.beginVerification(PLAYER, START.plusSeconds(2)));
@@ -58,7 +58,7 @@ class LoginSessionStoreTest {
 
     @Test
     void pendingAndVerifyingSessionsTimeOutFromJoinTime() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         Duration limit = Duration.ofMinutes(5);
         assertFalse(store.timeOut(PLAYER, START.plus(limit).minusNanos(1), limit));
@@ -71,7 +71,7 @@ class LoginSessionStoreTest {
 
     @Test
     void reconnectWithinFiveMinutesFromAuthenticatedQuitKeepsAuthentication() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         store.beginVerification(PLAYER, START.plusSeconds(1));
         store.authenticationSucceeded(PLAYER, START.plusSeconds(2));
@@ -86,7 +86,7 @@ class LoginSessionStoreTest {
 
     @Test
     void reconnectAtGraceDeadlineOrWithDifferentIpRequiresLogin() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         store.beginVerification(PLAYER, START.plusSeconds(1));
         store.authenticationSucceeded(PLAYER, START.plusSeconds(2));
@@ -106,7 +106,7 @@ class LoginSessionStoreTest {
 
     @Test
     void unauthenticatedQuitAndFreshStoreNeverGrantGrace() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         store.quit(PLAYER, START.plusSeconds(10));
         assertEquals(LoginSession.Status.PENDING, store.join(PLAYER, "PlayerOne", IP, START.plusSeconds(11)).status());
@@ -115,13 +115,13 @@ class LoginSessionStoreTest {
         store.authenticationSucceeded(PLAYER, START.plusSeconds(13));
         store.quit(PLAYER, START.plusSeconds(14));
         assertEquals(LoginSession.Status.PENDING,
-                new LoginSessionStore().join(PLAYER, "PlayerOne", IP, START.plusSeconds(15)).status());
+                new LoginSessionStore(Duration.ofMinutes(5)).join(PLAYER, "PlayerOne", IP, START.plusSeconds(15)).status());
         assertTrue(store.find(PLAYER).isPresent());
     }
 
     @Test
     void duplicateJoinForAnOnlineAuthenticatedPlayerOnlyRefreshesActivity() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         store.beginVerification(PLAYER, START.plusSeconds(1));
         store.authenticationSucceeded(PLAYER, START.plusSeconds(2));
@@ -136,7 +136,7 @@ class LoginSessionStoreTest {
 
     @Test
     void adminForceAuthenticateWorksOnUnauthenticatedSessionsOnly() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
 
         assertTrue(store.forceAuthenticate(PLAYER, START.plusSeconds(1)));
@@ -155,7 +155,7 @@ class LoginSessionStoreTest {
 
     @Test
     void adminRemoveDeletesTheSessionAndItsGraceRecord() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
         store.beginVerification(PLAYER, START.plusSeconds(1));
         store.authenticationSucceeded(PLAYER, START.plusSeconds(2));
@@ -171,7 +171,7 @@ class LoginSessionStoreTest {
 
     @Test
     void findByGameIdIgnoresCaseAndReturnsEmptyWhenMissing() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
 
         assertEquals(PLAYER, store.findByGameId("playerONE").orElseThrow().uuid());
@@ -181,7 +181,7 @@ class LoginSessionStoreTest {
 
     @Test
     void snapshotIsAnImmutableCopy() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         store.join(PLAYER, "PlayerOne", IP, START);
 
         List<LoginSession> snapshot = store.snapshot();
@@ -195,7 +195,7 @@ class LoginSessionStoreTest {
 
     @Test
     void timeOutAllOnlyMarksAwaitingSessionsPastTheirOwnDeadline() {
-        LoginSessionStore store = new LoginSessionStore();
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
         Duration limit = Duration.ofMinutes(5);
         store.join(PLAYER, "PlayerOne", IP, START);
         store.join(SECOND, "PlayerTwo", IP, START.plusSeconds(60));
@@ -244,5 +244,28 @@ class LoginSessionStoreTest {
         assertEquals(LoginSession.Status.PENDING, store.find(THIRD).orElseThrow().status(),
                 "未认证会话由超时逻辑处理，不属于宽限清理");
         assertEquals(0, store.expireGrace(START.plusSeconds(41)), "已清理记录不应重复计数");
+    }
+
+    @Test
+    void changingReconnectGraceKeepsSessionsAndAppliesTheNewDeadline() {
+        LoginSessionStore store = new LoginSessionStore(Duration.ofMinutes(5));
+        store.join(PLAYER, "PlayerOne", IP, START);
+        store.beginVerification(PLAYER, START.plusSeconds(1));
+        store.authenticationSucceeded(PLAYER, START.plusSeconds(2));
+        store.quit(PLAYER, START.plusSeconds(10));
+
+        store.join(SECOND, "PlayerTwo", IP, START);
+        store.beginVerification(SECOND, START.plusSeconds(1));
+        store.authenticationSucceeded(SECOND, START.plusSeconds(2));
+
+        store.setReconnectGrace(Duration.ofSeconds(30));
+
+        assertEquals(LoginSession.Status.AUTHENTICATED,
+                store.find(SECOND).orElseThrow().status(), "重载宽限不应丢失在线会话");
+        LoginSession rejoined = store.join(PLAYER, "PlayerOne", IP, START.plusSeconds(41));
+        assertEquals(LoginSession.Status.PENDING, rejoined.status(),
+                "新宽限应立即用于断线重连判断");
+        assertEquals(LoginSession.Status.AUTHENTICATED,
+                store.join(SECOND, "PlayerTwo", IP, START.plusSeconds(42)).status());
     }
 }
