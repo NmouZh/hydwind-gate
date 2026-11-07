@@ -1,6 +1,7 @@
 package me.hydwind.gate.ui;
 
-import org.bukkit.configuration.file.FileConfiguration;
+import java.util.Map;
+import me.hydwind.gate.config.YamlMaps;
 
 /**
  * 管理员命令文案。与玩家文案一起由 {@code config.yml} 的 {@code messages.admin} 段提供，
@@ -55,29 +56,31 @@ public record AdminMessages(
         );
     }
 
-    public static AdminMessages from(FileConfiguration config) {
+    /** @param messagesSection {@code config.yml} 的 {@code messages} 段 */
+    public static AdminMessages from(Map<String, Object> messagesSection) {
+        Map<String, Object> section = YamlMaps.section(messagesSection, "admin");
         AdminMessages defaults = defaults();
         return new AdminMessages(
-                config.getString("messages.admin.no-permission", defaults.noPermission()),
-                config.getString("messages.admin.usage", defaults.usage()),
-                config.getString("messages.admin.unknown-subcommand", defaults.unknownSubcommand()),
-                config.getString("messages.admin.reloaded", defaults.reloaded()),
-                config.getString("messages.admin.approve-usage", defaults.approveUsage()),
-                config.getString("messages.admin.kick-usage", defaults.kickUsage()),
-                config.getString("messages.admin.session-not-found", defaults.sessionNotFound()),
-                config.getString("messages.admin.already-authenticated", defaults.alreadyAuthenticated()),
-                config.getString("messages.admin.approved-player", defaults.approvedPlayer()),
-                config.getString("messages.admin.approved", defaults.approved()),
-                config.getString("messages.admin.kicked-player", defaults.kickedPlayer()),
-                config.getString("messages.admin.kicked", defaults.kicked()),
-                config.getString("messages.admin.status-pending", defaults.statusPending()),
-                config.getString("messages.admin.status-authenticated", defaults.statusAuthenticated()),
-                config.getString("messages.admin.status-authenticated-grace", defaults.statusAuthenticatedGrace()),
-                config.getString("messages.admin.status-health-healthy", defaults.statusHealthHealthy()),
-                config.getString("messages.admin.status-health-unhealthy", defaults.statusHealthUnhealthy()),
-                config.getString("messages.admin.status-restart-quota", defaults.statusRestartQuota()),
-                config.getString("messages.admin.status-next-allowed", defaults.statusNextAllowed()),
-                config.getString("messages.admin.status-permission", defaults.statusPermission())
+                YamlMaps.rawString(section, "no-permission", defaults.noPermission()),
+                YamlMaps.rawString(section, "usage", defaults.usage()),
+                YamlMaps.rawString(section, "unknown-subcommand", defaults.unknownSubcommand()),
+                YamlMaps.rawString(section, "reloaded", defaults.reloaded()),
+                YamlMaps.rawString(section, "approve-usage", defaults.approveUsage()),
+                YamlMaps.rawString(section, "kick-usage", defaults.kickUsage()),
+                YamlMaps.rawString(section, "session-not-found", defaults.sessionNotFound()),
+                YamlMaps.rawString(section, "already-authenticated", defaults.alreadyAuthenticated()),
+                YamlMaps.rawString(section, "approved-player", defaults.approvedPlayer()),
+                YamlMaps.rawString(section, "approved", defaults.approved()),
+                YamlMaps.rawString(section, "kicked-player", defaults.kickedPlayer()),
+                YamlMaps.rawString(section, "kicked", defaults.kicked()),
+                YamlMaps.rawString(section, "status-pending", defaults.statusPending()),
+                YamlMaps.rawString(section, "status-authenticated", defaults.statusAuthenticated()),
+                YamlMaps.rawString(section, "status-authenticated-grace", defaults.statusAuthenticatedGrace()),
+                YamlMaps.rawString(section, "status-health-healthy", defaults.statusHealthHealthy()),
+                YamlMaps.rawString(section, "status-health-unhealthy", defaults.statusHealthUnhealthy()),
+                YamlMaps.rawString(section, "status-restart-quota", defaults.statusRestartQuota()),
+                YamlMaps.rawString(section, "status-next-allowed", defaults.statusNextAllowed()),
+                YamlMaps.rawString(section, "status-permission", defaults.statusPermission())
         );
     }
 }
