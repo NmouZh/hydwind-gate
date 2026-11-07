@@ -141,10 +141,6 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
         closed = true;
     }
 
-    static VerifyResult mapVerifyResponse(int statusCode, String body) {
-        return mapVerifyResponse(statusCode, body, null);
-    }
-
     /**
      * 把校验响应映射为结果。5xx 视为网站暂时不可用（传输层语义），
      * 其余非预期状态码视为契约不匹配。

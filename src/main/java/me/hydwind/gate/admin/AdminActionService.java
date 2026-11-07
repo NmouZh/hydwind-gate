@@ -58,19 +58,22 @@ public final class AdminActionService {
             return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, session.get().gameId());
         }
 
-        UUID uuid = session.map(LoginSession::uuid)
-                .or(() -> resident.map(LimboResidents.Resident::uuid))
-                .orElseThrow();
         String displayName = resident.map(LimboResidents.Resident::gameId)
                 .or(() -> session.map(LoginSession::gameId))
                 .orElse(playerName);
 
         // 先写会话状态：ServerPreConnectEvent 会拒绝未认证会话的转服。
-        boolean wroteSession = sessions.forceAuthenticate(uuid, clock.instant());
-        if (!wroteSession && sessions.find(uuid).map(LoginSession::isAuthenticated).orElse(false)) {
+        // 按游戏 ID 一次完成“查找 + 写入”，保证写入的正是刚才判定为未认证的那个会话；
+        // 否则并发重连会让会话 UUID 与 limbo 中的新连接 UUID 不一致，放行写到旧会话上。
+        boolean wroteSession = sessions.forceAuthenticateByGameId(displayName, clock.instant()).isPresent();
+        if (!wroteSession && sessions.findByGameId(displayName)
+                .map(LoginSession::isAuthenticated).orElse(false)) {
             return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, displayName);
         }
         if (resident.isPresent()) {
+            // limbo 中可能是重连后的新连接：它的会话若仍是 PENDING，必须再放行一次，
+            // 否则转服会被 ServerPreConnectEvent 拒绝。
+            sessions.forceAuthenticate(resident.get().uuid(), clock.instant());
             boolean stillInLimbo = residents.approve(resident.get().uuid(), message);
             return new AdminResult(stillInLimbo
                     ? AdminResult.Kind.APPROVED_IN_LIMBO

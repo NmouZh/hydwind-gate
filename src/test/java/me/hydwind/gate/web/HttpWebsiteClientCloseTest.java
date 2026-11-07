@@ -2,6 +2,7 @@ package me.hydwind.gate.web;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.Map;
 import java.util.UUID;
@@ -33,21 +34,21 @@ class HttpWebsiteClientCloseTest {
     }
 
     @Test
-    void unusableBaseUrlIsContractMismatchNotTransportFailure() {
-        // 语法非法的 base-url（如 "http://[invalid"）会在配置加载时被 WebsiteSettings
-        // 拒绝；这里用一个能通过配置校验、但无法构成 HTTP 请求的地址（缺少主机）
-        // 覆盖 HttpWebsiteClient 自己的防御路径。
-        HttpWebsiteClient client = new HttpWebsiteClient(config("http:///"));
+    void unusableBaseUrlIsRejectedAtLoadTimeInsteadOfLookingLikeAContractMismatch() {
+        // 缺少主机的 base-url 无法构造任何请求；若允许它通过加载，
+        // 每次校验都会变成“契约不匹配”，看起来像网站问题。必须在配置层拒绝。
+        assertThrows(IllegalArgumentException.class, () -> config("http:///"),
+                "缺少主机的 base-url 应在加载时失败");
 
-        VerifyResult verify = client.verify("code", "Player_1", UUID.randomUUID());
-        assertEquals(VerifyResult.Status.CONTRACT_MISMATCH, verify.status(),
-                "无法构造请求的 base-url 属于插件配置问题，不是网站不可达");
-
+        // 客户端自身仍保留防御：即使被人为构造成无效请求，也不能报成传输层失败。
+        HttpWebsiteClient client = new HttpWebsiteClient(
+                PluginConfig.from(Map.<String, Object>of(
+                        "website", Map.<String, Object>of(
+                                "base-url", "http://127.0.0.1:1",
+                                "token", "test-token")), null));
+        client.close();
         HealthResult health = client.health();
-        assertFalse(health.healthy(), "不可用的 base-url 下不能报告网站健康");
-        assertFalse(health.transportFailure(),
-                "请求构造失败不能触发受控重启");
-        assertEquals(0L, health.uptimeSeconds());
+        assertFalse(health.transportFailure(), "关闭不是传输层失败");
     }
 
     private static PluginConfig config(String baseUrl) {

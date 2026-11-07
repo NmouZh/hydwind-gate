@@ -233,6 +233,45 @@ class LoginFlowTest {
         assertEquals(LoginSession.Status.PENDING, session().status());
     }
 
+    @Test
+    void lateFailureFromAnAbandonedAttemptDoesNotTouchTheNewAttempt() {
+        SubmitResult first = flow.submit(identity, "/login WrongCode");
+        website.result = VerifyResult.invalidCode();
+        VerifyOutcome firstOutcome = flow.verify(identity, first.verificationId(), first.normalizedCode());
+        assertFalse(firstOutcome.authenticated());
+        assertEquals(messages.invalidCode(), firstOutcome.message(),
+                "前置：第一次失败必须正常返回自己的文案");
+        assertEquals(LoginSession.Status.PENDING, session().status());
+
+        SubmitResult retry = flow.submit(identity, "/login AnotherCode");
+        assertEquals(SubmitKind.VERIFYING, retry.kind());
+        assertNotEquals(first.verificationId(), retry.verificationId(),
+                "重试必须分配新的校验编号");
+        assertEquals(LoginSession.Status.VERIFYING, session().status());
+
+        // 旧请求的失败结果现在才到达。故意用会触发重启的不可达：若缺少编号守卫，
+        // 旧结果会把重试打回 PENDING、播报旧文案并触发重启，下面的断言就会失败。
+        website.result = VerifyResult.unreachable();
+        VerifyOutcome late = flow.verify(identity, first.verificationId(), first.normalizedCode());
+
+        assertFalse(late.authenticated(), "迟到的失败结果不得放行");
+        assertFalse(late.triggerRestart(), "迟到的失败结果不得触发重启");
+        assertFalse(late.contractMismatch(), "迟到的失败结果不得报告契约不匹配");
+        assertEquals("", late.message(), "迟到的失败结果不得向玩家播报旧文案");
+        assertNull(late.status(), "迟到的失败结果不得暴露诊断状态");
+
+        LoginSession stillVerifying = session();
+        assertEquals(LoginSession.Status.VERIFYING, stillVerifying.status(),
+                "旧结果不得把重试打回 PENDING");
+        assertEquals(retry.verificationId(), stillVerifying.verificationId(),
+                "旧结果不得改写重试的校验编号");
+
+        website.result = VerifyResult.ok(GAME_ID, "一号玩家", "player");
+        VerifyOutcome success = flow.verify(identity, retry.verificationId(), retry.normalizedCode());
+        assertTrue(success.authenticated(), "丢弃旧结果后，新尝试的成功结果必须正常生效");
+        assertEquals(LoginSession.Status.AUTHENTICATED, session().status());
+    }
+
     private void authenticate(VerifyResult result) {
         SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
         website.result = result;

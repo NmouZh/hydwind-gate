@@ -89,9 +89,11 @@ public final class LoginFlow {
             return new VerifyOutcome(true, false, false, feedback.message(), result.status());
         }
 
-        // 失败一律退回 PENDING 允许重试；返回值只表示这次结果是否仍然有效，
-        // 不影响本次给玩家的提示。
-        sessions.authenticationFailed(identity.uuid(), verificationId, clock.instant());
+        // 失败结果也必须归属到发起它的那次校验：玩家可能已经重试并产生了新编号。
+        // 迟到的失败结果不得改写新尝试的状态，也不该向玩家播报旧文案或触发重启。
+        if (!sessions.authenticationFailed(identity.uuid(), verificationId, clock.instant())) {
+            return new VerifyOutcome(false, false, false, "", null);
+        }
         return new VerifyOutcome(false, feedback.triggerRestart(),
                 isContractMismatch(result.status()), feedback.message(), result.status());
     }

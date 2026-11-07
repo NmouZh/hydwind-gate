@@ -433,4 +433,30 @@ class PluginConfigTest {
                 Map.of("website", Map.of("base-url", "https://example.com/mc?tenant=x")), null),
                 "PluginConfig.from 加载带 query 的 base-url 也必须失败");
     }
+
+    // ---------------------------------------------------------------------
+    // 回归：base-url 必须有 host，否则每次请求都会失败并被误判为契约不匹配。
+    // ---------------------------------------------------------------------
+
+    @Test
+    void websiteBaseUrlMustIncludeAHost() {
+        IllegalArgumentException emptyAuthority = assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("http:///", "token", 100, 100, "/api/health"),
+                "http:/// 语法合法但没有 host，必须在加载时拒绝");
+        assertTrue(emptyAuthority.getMessage().contains("host"),
+                "错误信息应明确指出缺少 host");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("https://", "token", 100, 100, "/api/health"),
+                "https:// 没有 host，必须在加载时拒绝");
+
+        assertEquals("https://example.com/mc",
+                new WebsiteSettings("https://example.com/mc", "token", 100, 100, "/api/health")
+                        .baseUrl(),
+                "带 host 与路径的 https 地址必须通过");
+
+        assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
+                Map.of("website", Map.of("base-url", "http:///")), null),
+                "PluginConfig.from 加载无 host 的 base-url 也必须失败");
+    }
 }

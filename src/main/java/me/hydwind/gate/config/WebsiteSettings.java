@@ -49,6 +49,12 @@ public record WebsiteSettings(
             throw new IllegalArgumentException(
                     "website.base-url must not contain a query or fragment: " + baseUrl);
         }
+        // 没有 host 的 URL（如 "http:///"）语法合法，但所有请求都会在构造阶段失败，
+        // 最终被归类为契约不匹配——看起来像网站问题。必须在加载时拒绝。
+        if (baseUri.getHost() == null || baseUri.getHost().isBlank()) {
+            throw new IllegalArgumentException(
+                    "website.base-url must include a host: " + baseUrl);
+        }
         if (connectTimeoutMillis <= 0) {
             throw new IllegalArgumentException("website.connect-timeout-millis must be positive");
         }

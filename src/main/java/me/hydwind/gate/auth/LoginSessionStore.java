@@ -110,8 +110,9 @@ public final class LoginSessionStore {
                 || session.verificationId() != verificationId) {
             return false;
         }
-        if (now.isAfter(session.loginDeadline())) {
-            // 已过截止时刻：迟到的成功结果不得放行，交由超时路径处理。
+        if (!now.isBefore(session.loginDeadline())) {
+            // 到达或超过截止时刻与 timeOut 的边界一致：迟到的成功结果不得放行，
+            // 交由超时路径处理。
             sessions.put(uuid, session.transitionTo(LoginSession.Status.TIMED_OUT, now));
             return false;
         }
@@ -226,6 +227,18 @@ public final class LoginSessionStore {
         return Optional.ofNullable(sessions.get(uuid));
     }
 
+    /**
+     * 该玩家当前是否已认证、可连接后端。
+     *
+     * <p>这是门禁唯一的放行判据：{@code ServerPreConnectEvent}、limbo 放行分支与
+     * 管理员动作都问同一个问题。没有会话或会话未认证一律返回 {@code false}
+     * （fail-closed）。</p>
+     */
+    public synchronized boolean isAuthenticated(UUID uuid) {
+        LoginSession session = sessions.get(uuid);
+        return session != null && session.isAuthenticated();
+    }
+
     /** 按游戏 ID（大小写不敏感）查找会话，供管理员命令使用。 */
     public synchronized Optional<LoginSession> findByGameId(String gameId) {
         Objects.requireNonNull(gameId, "gameId");
@@ -242,6 +255,26 @@ public final class LoginSessionStore {
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.AUTHENTICATED, now));
         return true;
+    }
+
+    /**
+     * 管理员按游戏 ID 放行，返回被写入认证的会话。
+     *
+     * <p>查找与写入在同一把锁内，避免调用方先查到旧会话、再写另一个 UUID；
+     * limbo 中同名但不同 UUID 的新连接由调用方随后按 UUID 单独处理。</p>
+     */
+    public synchronized Optional<LoginSession> forceAuthenticateByGameId(String gameId, Instant now) {
+        Objects.requireNonNull(gameId, "gameId");
+        LoginSession session = sessions.values().stream()
+                .filter(candidate -> candidate.gameId().equalsIgnoreCase(gameId))
+                .findFirst()
+                .orElse(null);
+        if (session == null || session.isAuthenticated()) {
+            return Optional.empty();
+        }
+        LoginSession updated = session.transitionTo(LoginSession.Status.AUTHENTICATED, now);
+        sessions.put(session.uuid(), updated);
+        return Optional.of(updated);
     }
 
     /**

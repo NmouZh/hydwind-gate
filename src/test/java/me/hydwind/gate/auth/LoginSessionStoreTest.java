@@ -2,6 +2,7 @@ package me.hydwind.gate.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -574,5 +575,106 @@ class LoginSessionStoreTest {
         long reclaimedId = store.beginVerification(PLAYER, afterRetention.plusSeconds(1)).orElseThrow();
         assertEquals(1L, reclaimedId,
                 "超过 24 小时未使用的编号条目应被 expireGrace 回收，新分配必须从 1 重新开始");
+    }
+
+    // ---------------------------------------------------------------------
+    // 回归：门禁唯一放行判据 isAuthenticated 必须 fail-closed。
+    // ---------------------------------------------------------------------
+
+    @Test
+    void isAuthenticatedIsFalseForEverySessionStateExceptAuthenticated() {
+        LoginSessionStore store = newStore();
+
+        assertFalse(store.isAuthenticated(PLAYER), "没有会话时必须返回 false（fail-closed）");
+
+        join(store, PLAYER, "PlayerOne", START);
+        assertFalse(store.isAuthenticated(PLAYER), "PENDING 会话不得放行");
+
+        long id = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+        assertFalse(store.isAuthenticated(PLAYER), "VERIFYING 会话不得放行");
+
+        assertTrue(store.authenticationSucceeded(PLAYER, id, START.plusSeconds(2)));
+        assertTrue(store.isAuthenticated(PLAYER), "AUTHENTICATED 会话必须放行");
+
+        store.quit(PLAYER, START.plusSeconds(3));
+        LoginSession grace = store.find(PLAYER).orElseThrow();
+        assertNotNull(grace.disconnectedAt(), "前置：断线后必须留下宽限记录");
+        assertEquals(LoginSession.Status.AUTHENTICATED, grace.status());
+        assertTrue(store.isAuthenticated(PLAYER),
+                "宽限内的断线认证会话（disconnectedAt 非空）仍算已认证");
+
+        join(store, SECOND, "PlayerTwo", START);
+        assertFalse(store.isAuthenticated(SECOND), "前置：新会话仍为 PENDING");
+        assertTrue(store.timeOut(SECOND, START.plus(LOGIN_TIMEOUT)));
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(SECOND).orElseThrow().status());
+        assertFalse(store.isAuthenticated(SECOND), "TIMED_OUT 会话不得放行");
+
+        assertFalse(store.isAuthenticated(THIRD), "从未进服的 UUID 不得放行");
+    }
+
+    @Test
+    void forceAuthenticateByGameIdWritesOnlyTheMatchingUnauthenticatedSession() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        join(store, SECOND, "PlayerTwo", START);
+        LoginSession secondBefore = store.find(SECOND).orElseThrow();
+
+        LoginSession forced = store
+                .forceAuthenticateByGameId("playerONE", START.plusSeconds(1))
+                .orElseThrow();
+
+        assertEquals(PLAYER, forced.uuid(), "必须返回被写入的那个会话");
+        assertEquals("PlayerOne", forced.gameId());
+        assertEquals(LoginSession.Status.AUTHENTICATED, forced.status());
+        assertEquals(START.plusSeconds(1), forced.lastActivityAt());
+        assertTrue(store.isAuthenticated(PLAYER), "store 中该 UUID 必须已认证");
+        assertEquals(forced, store.find(PLAYER).orElseThrow(),
+                "返回的会话必须正是 store 中写入的会话");
+
+        assertEquals(secondBefore, store.find(SECOND).orElseThrow(),
+                "游戏 ID 不匹配的会话必须原样保留，不得被误写");
+        assertEquals(LoginSession.Status.PENDING, store.find(SECOND).orElseThrow().status());
+
+        assertTrue(store.forceAuthenticateByGameId("PlayerOne", START.plusSeconds(2)).isEmpty(),
+                "已认证会话返回 empty");
+        assertEquals(forced, store.find(PLAYER).orElseThrow(),
+                "已认证会话的状态与活动时间都不得被重复放行改写");
+
+        assertTrue(store.forceAuthenticateByGameId("MissingPlayer", START.plusSeconds(3)).isEmpty(),
+                "不存在的游戏 ID 返回 empty");
+        assertTrue(store.snapshot().stream()
+                        .noneMatch(session -> session.gameId().equals("MissingPlayer")),
+                "放行失败不得凭空创建会话");
+        assertFalse(store.isAuthenticated(THIRD), "未被放行的 UUID 仍不得通过门禁");
+    }
+
+    @Test
+    void exactDeadlineRejectsAuthenticationAndTimesOutJustLikeTimeOut() {
+        LoginSessionStore store = newStore();
+        Instant deadline = START.plus(LOGIN_TIMEOUT);
+
+        join(store, PLAYER, "PlayerOne", START);
+        long playerId = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+        assertFalse(store.authenticationSucceeded(PLAYER, playerId, deadline),
+                "now == loginDeadline 时不得认证，必须与 timeOut 的 !now.isBefore(deadline) 边界一致");
+
+        LoginSession timedOut = store.find(PLAYER).orElseThrow();
+        assertEquals(LoginSession.Status.TIMED_OUT, timedOut.status(),
+                "恰好等于 deadline 的成功结果应把会话落为 TIMED_OUT");
+        assertEquals(deadline, timedOut.lastActivityAt());
+        assertEquals(deadline, timedOut.loginDeadline(), "超时迁移不得改变会话自己的 deadline");
+        assertFalse(store.isAuthenticated(PLAYER), "超时迁移后不得通过门禁");
+
+        join(store, SECOND, "PlayerTwo", START);
+        assertTrue(store.beginVerification(SECOND, START.plusSeconds(1)).isPresent());
+        assertTrue(store.timeOut(SECOND, deadline),
+                "timeOut 在 now == loginDeadline 时必须返回 true");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(SECOND).orElseThrow().status());
+
+        join(store, THIRD, "PlayerThree", START);
+        long thirdId = store.beginVerification(THIRD, START.plusSeconds(1)).orElseThrow();
+        assertTrue(store.authenticationSucceeded(THIRD, thirdId, deadline.minusNanos(1)),
+                "deadline 前一纳秒仍属于有效窗口，必须允许认证");
+        assertTrue(store.isAuthenticated(THIRD));
     }
 }

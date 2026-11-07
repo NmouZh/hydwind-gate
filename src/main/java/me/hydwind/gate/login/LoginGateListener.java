@@ -71,11 +71,8 @@ public final class LoginGateListener {
 
     @Subscribe
     public void onServerPreConnect(ServerPreConnectEvent event) {
-        boolean authenticated = sessionStore
-                .find(event.getPlayer().getUniqueId())
-                .map(LoginSession::isAuthenticated)
-                .orElse(false);
-        if (!authenticated) {
+        // 唯一的放行判据在会话 Module 里；本 Adapter 只负责把拒绝转成事件结果。
+        if (!sessionStore.isAuthenticated(event.getPlayer().getUniqueId())) {
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
         }
     }

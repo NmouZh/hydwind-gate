@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
 import java.time.Clock;
@@ -110,6 +111,46 @@ class RuntimeHolderTest {
 
         assertDoesNotThrow(holder::close, "非 AutoCloseable 的网站在关闭时直接跳过");
         assertNull(holder.current());
+    }
+
+    @Test
+    void publishAfterCloseThrowsAndClosesTheRejectedGeneration() {
+        RuntimeHolder holder = new RuntimeHolder();
+        holder.close();
+
+        FakeWebsiteClient lateClient = new FakeWebsiteClient();
+        assertThrows(IllegalStateException.class,
+                () -> holder.publish(snapshot(lateClient)),
+                "close 之后再 publish 必须抛 IllegalStateException");
+        assertEquals(1, lateClient.closeCount,
+                "被拒绝的新代际必须立即关闭其网站客户端，且只关闭一次");
+        assertNull(holder.current(), "被拒绝的新代际不得成为当前代际");
+    }
+
+    @Test
+    void interleavedPublishAndCloseLeavesNoCurrentGenerationAndStaysIdempotent() {
+        RuntimeHolder holder = new RuntimeHolder();
+        FakeWebsiteClient firstClient = new FakeWebsiteClient();
+        FakeWebsiteClient secondClient = new FakeWebsiteClient();
+
+        holder.publish(snapshot(firstClient));
+        holder.publish(snapshot(secondClient));
+        holder.close();
+
+        assertNull(holder.current(), "close 与发布交错后 current 必须为 null");
+        assertEquals(1, secondClient.closeCount, "当前代际只关闭一次");
+        assertEquals(0, firstClient.closeCount, "旧代际仍由发布方负责关闭");
+
+        FakeWebsiteClient lateClient = new FakeWebsiteClient();
+        assertThrows(IllegalStateException.class,
+                () -> holder.publish(snapshot(lateClient)),
+                "关闭后再发布必须被拒绝");
+        assertEquals(1, lateClient.closeCount, "被拒绝的代际只关闭一次");
+
+        assertDoesNotThrow(holder::close, "publish 被拒后重复 close 仍应幂等");
+        assertNull(holder.current(), "重复 close 后 current 必须仍为 null");
+        assertEquals(1, secondClient.closeCount, "重复 close 不得重复关闭原当前代际");
+        assertEquals(1, lateClient.closeCount, "重复 close 不得触碰已被拒绝的代际");
     }
 
     private RuntimeSnapshot snapshot(WebsiteClient client) {
