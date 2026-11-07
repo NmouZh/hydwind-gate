@@ -8,6 +8,7 @@ import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -16,9 +17,12 @@ import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import me.hydwind.gate.auth.LoginSessionStore;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.config.RestartSettings;
+import me.hydwind.gate.login.LimboLoginService;
+import me.hydwind.gate.login.LoginGateListener;
 import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.web.HttpWebsiteClient;
 import me.hydwind.gate.web.RestartPolicy;
@@ -50,6 +54,8 @@ public final class HydwindGatePlugin {
     public static final String VERSION = "0.1.0";
 
     private static final String CONFIG_FILE = "config.yml";
+    /** 清理过期断线宽限记录的间隔。 */
+    private static final long SESSION_SWEEP_SECONDS = 60L;
     private static final java.util.logging.Logger RESTART_LOGGER =
             java.util.logging.Logger.getLogger("me.hydwind.gate.RestartTrigger");
 
@@ -64,6 +70,8 @@ public final class HydwindGatePlugin {
     private WebsiteClient websiteClient;
     private RestartPolicy restartPolicy;
     private RestartTrigger restartTrigger;
+    private LimboLoginService limboLoginService;
+    private ScheduledTask sessionMaintenanceTask;
 
     @Inject
     public HydwindGatePlugin(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -75,6 +83,24 @@ public final class HydwindGatePlugin {
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
         loadConfiguration();
+
+        limboLoginService = new LimboLoginService(this, server, logger);
+        try {
+            limboLoginService.initialize();
+        } catch (RuntimeException exception) {
+            // 没有 limbo 就无法拦截未认证玩家；宁可关闭代理也不放行。
+            logger.error("Failed to initialize the limbo login gate; shutting the proxy down.", exception);
+            server.shutdown();
+            return;
+        }
+
+        server.getEventManager().register(this, new LoginGateListener(this, limboLoginService, logger));
+        sessionMaintenanceTask = server.getScheduler()
+                .buildTask(this, this::expireDisconnectedSessions)
+                .delay(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
+                .repeat(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
+                .schedule();
+
         logger.info("HydwindGate {} enabled (main server: {}, limbo world: {}).",
                 VERSION, pluginConfig.mainServer(), pluginConfig.limboWorld());
         logger.info("Website: {}, health path: {}, restart request: {}.",
@@ -84,6 +110,13 @@ public final class HydwindGatePlugin {
 
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
+        if (sessionMaintenanceTask != null) {
+            sessionMaintenanceTask.cancel();
+            sessionMaintenanceTask = null;
+        }
+        if (limboLoginService != null) {
+            limboLoginService.shutdown();
+        }
         logger.info("HydwindGate disabled.");
     }
 
@@ -92,8 +125,24 @@ public final class HydwindGatePlugin {
      * 因此热重载不会打断进行中的登录，也不会清空重启冷却。
      */
     public void reloadConfiguration() {
+        String previousLimbo = limboKey(pluginConfig);
         loadConfiguration();
+        if (previousLimbo != null && !previousLimbo.equals(limboKey(pluginConfig))) {
+            logger.warn("limbo.world or limbo.spawn changed; restart the proxy to apply them "
+                    + "(the current limbo and its players are kept).");
+        }
         logger.info("Configuration reloaded; active login sessions were preserved.");
+    }
+
+    private void expireDisconnectedSessions() {
+        int removed = sessionStore.expireGrace(clock.instant());
+        if (removed > 0) {
+            logger.info("Expired {} reconnect grace record(s).", removed);
+        }
+    }
+
+    private static String limboKey(PluginConfig config) {
+        return config == null ? null : config.limboWorld() + "|" + config.limboSpawn();
     }
 
     private void loadConfiguration() {
@@ -167,6 +216,14 @@ public final class HydwindGatePlugin {
 
     public ProxyServer proxyServer() {
         return server;
+    }
+
+    public Clock clock() {
+        return clock;
+    }
+
+    public Logger logger() {
+        return logger;
     }
 
     public PluginConfig pluginConfig() {
