@@ -44,6 +44,37 @@ jobs:
       - name: Build
         run: gradle build
 
+      - name: Report JUnit test count
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          files = glob.glob('build/test-results/test/TEST-*.xml')
+          if not files:
+              print('::error::No JUnit result files found; gradle build did not execute tests')
+              sys.exit(1)
+
+          totals = {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0}
+          for path in files:
+              root = ET.parse(path).getroot()
+              for key in totals:
+                  totals[key] += int(root.get(key, 0))
+
+          print(
+              f"JUnit results: {len(files)} suites, {totals['tests']} tests, "
+              f"{totals['failures']} failures, {totals['errors']} errors, "
+              f"{totals['skipped']} skipped"
+          )
+          if totals['tests'] == 0:
+              print('::error::No tests were executed')
+              sys.exit(1)
+          if totals['failures'] or totals['errors']:
+              print('::error::Test failures were reported')
+              sys.exit(1)
+          PY
+
       - name: Verify Velocity plugin metadata is packaged
         run: |
           set -euo pipefail
