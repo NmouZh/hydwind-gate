@@ -17,17 +17,18 @@ import java.util.UUID;
  */
 public final class LoginSessionStore {
 
-    /** 已认证玩家断线后，同 UUID + 同 IP 免登录的默认时长。 */
-    static final Duration RECONNECT_GRACE = Duration.ofMinutes(5);
-
     private final Map<UUID, LoginSession> sessions = new HashMap<>();
-    private final Duration reconnectGrace;
-
-    public LoginSessionStore() {
-        this(RECONNECT_GRACE);
-    }
+    private volatile Duration reconnectGrace;
 
     public LoginSessionStore(Duration reconnectGrace) {
+        this.reconnectGrace = Objects.requireNonNull(reconnectGrace, "reconnectGrace");
+    }
+
+    /**
+     * 热重载 {@code auth.session-grace-seconds}。只更新后续宽限判断的截止时间，
+     * 不移动、不删除已有会话；刷新会话由维护任务按新时长处理。
+     */
+    public synchronized void setReconnectGrace(Duration reconnectGrace) {
         this.reconnectGrace = Objects.requireNonNull(reconnectGrace, "reconnectGrace");
     }
 

@@ -17,9 +17,9 @@ import java.util.UUID;
 /**
  * 基于 {@link HttpClient} 的 {@link WebsiteClient} 实现。
  *
- * <p>任何网络故障、超时、非预期状态码或无法解析的响应都映射为
- * {@link VerifyResult.Status#UNREACHABLE} / {@link HealthResult#unhealthy()}，
- * 由调用方执行 fail-closed 逻辑。</p>
+ * <p>网络故障、超时、无法解析的响应映射为
+ * {@link VerifyResult.Status#UNREACHABLE} / {@link HealthResult#unhealthy()}；
+ * 401/403/404 映射为明确的失败结果，由调用方按配置文案提示。</p>
  */
 public final class HttpWebsiteClient implements WebsiteClient {
 
@@ -112,6 +112,8 @@ public final class HttpWebsiteClient implements WebsiteClient {
         return switch (statusCode) {
             case 200 -> parseSuccess(body);
             case 401 -> VerifyResult.unauthorized();
+            case 403 -> VerifyResult.forbidden();
+            case 404 -> VerifyResult.notFound();
             case 409 -> parseConflict(body);
             case 429 -> parseRateLimited(body, retryAfterHeader);
             default -> VerifyResult.unreachable();

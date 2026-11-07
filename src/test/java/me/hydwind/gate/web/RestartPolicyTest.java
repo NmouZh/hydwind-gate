@@ -16,7 +16,7 @@ class RestartPolicyTest {
 
     @Test
     void restartHasTenMinuteCooldownAndDeniedAttemptDoesNotResetIt() {
-        RestartPolicy policy = new RestartPolicy();
+        RestartPolicy policy = new RestartPolicy(RestartSettings.DEFAULT);
         assertTrue(policy.tryAcquire(START));
         assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(9))));
         assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(10))));
@@ -24,7 +24,7 @@ class RestartPolicyTest {
 
     @Test
     void onlyTwoRestartsAreAllowedInARollingHour() {
-        RestartPolicy policy = new RestartPolicy();
+        RestartPolicy policy = new RestartPolicy(RestartSettings.DEFAULT);
         assertTrue(policy.tryAcquire(START));
         assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(10))));
         assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(20))));
@@ -35,7 +35,7 @@ class RestartPolicyTest {
 
     @Test
     void remainingSlotsRespectCooldownAndWindow() {
-        RestartPolicy policy = new RestartPolicy();
+        RestartPolicy policy = new RestartPolicy(RestartSettings.DEFAULT);
         assertEquals(2, policy.remaining(START));
         assertTrue(policy.tryAcquire(START));
         assertEquals(0, policy.remaining(START.plus(Duration.ofMinutes(1))), "冷却期内没有可用额度");
@@ -65,7 +65,7 @@ class RestartPolicyTest {
 
     @Test
     void reconfigureKeepsAcquisitionsAndCooldown() {
-        RestartPolicy policy = new RestartPolicy();
+        RestartPolicy policy = new RestartPolicy(RestartSettings.DEFAULT);
         assertTrue(policy.tryAcquire(START));
 
         policy.reconfigure(settings(Duration.ofMinutes(10), Duration.ofHours(1), 2));
@@ -78,7 +78,7 @@ class RestartPolicyTest {
 
     @Test
     void reloadDoesNotClearWindowHistoryEvenWhenLimitShrinks() {
-        RestartPolicy policy = new RestartPolicy();
+        RestartPolicy policy = new RestartPolicy(RestartSettings.DEFAULT);
         assertTrue(policy.tryAcquire(START));
 
         // /hydwind reload 用新配置更新策略，但已消耗的额度必须保留。

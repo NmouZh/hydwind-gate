@@ -9,25 +9,17 @@ import java.util.Optional;
 import me.hydwind.gate.config.RestartSettings;
 
 /**
- * 受控重启的准入策略：两次重启至少相隔 10 分钟，任意滚动一小时内最多 2 次。
+ * 受控重启的准入策略：两次重启至少相隔配置的冷却时间，滚动窗口内最多触发配置的次数。
  *
  * <p>超限只返回 {@code false}，由调用方决定是否记录告警；不抛异常。
  * 时间由调用方注入，便于测试。
  */
 public final class RestartPolicy {
 
-    static final Duration COOLDOWN = Duration.ofMinutes(10);
-    static final Duration WINDOW = Duration.ofHours(1);
-    static final int MAX_PER_WINDOW = 2;
-
     private Duration cooldown;
     private Duration window;
     private int maxPerWindow;
     private final List<Instant> acquisitions = new ArrayList<>();
-
-    public RestartPolicy() {
-        this(COOLDOWN, WINDOW, MAX_PER_WINDOW);
-    }
 
     public RestartPolicy(RestartSettings settings) {
         this(Objects.requireNonNull(settings, "settings").cooldown(),

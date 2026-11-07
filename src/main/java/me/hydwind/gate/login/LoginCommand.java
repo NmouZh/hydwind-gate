@@ -1,5 +1,8 @@
 package me.hydwind.gate.login;
 
+import me.hydwind.gate.auth.KaomojiCode;
+import me.hydwind.gate.util.CommandLine;
+
 /**
  * limbo 内由 {@code LimboSessionHandler#onChat} 收到的聊天/命令。
  *
@@ -8,9 +11,6 @@ package me.hydwind.gate.login;
  */
 public record LoginCommand(Status status, String code) {
 
-    /** Minecraft 聊天/命令内容上限；登录码必须远低于它。 */
-    public static final int MAX_CODE_LENGTH = 256;
-
     public enum Status {
         /** 合法的 {@code /login <码>}，{@link #code()} 非空。 */
         LOGIN,
@@ -18,44 +18,23 @@ public record LoginCommand(Status status, String code) {
         NOT_LOGIN,
         /** 是登录命令但没有登录码。 */
         EMPTY_CODE,
-        /** 登录码超过聊天安全长度。 */
+        /** 登录码超过网站接受的长度。 */
         TOO_LONG
     }
 
     public static LoginCommand parse(String raw) {
-        if (raw == null) {
-            return new LoginCommand(Status.NOT_LOGIN, null);
-        }
-        String trimmed = raw.strip();
-        if (trimmed.startsWith("/")) {
-            trimmed = trimmed.substring(1).strip();
-        }
-        if (trimmed.isEmpty()) {
+        CommandLine line = CommandLine.parse(raw);
+        if (line == null || !line.command().equalsIgnoreCase("login")) {
             return new LoginCommand(Status.NOT_LOGIN, null);
         }
 
-        int separator = indexOfWhitespace(trimmed);
-        String command = separator < 0 ? trimmed : trimmed.substring(0, separator);
-        if (!command.equalsIgnoreCase("login")) {
-            return new LoginCommand(Status.NOT_LOGIN, null);
-        }
-
-        String code = separator < 0 ? "" : trimmed.substring(separator + 1).strip();
+        String code = line.remainder();
         if (code.isEmpty()) {
             return new LoginCommand(Status.EMPTY_CODE, null);
         }
-        if (code.length() > MAX_CODE_LENGTH) {
+        if (code.codePointCount(0, code.length()) > KaomojiCode.MAX_LENGTH) {
             return new LoginCommand(Status.TOO_LONG, null);
         }
         return new LoginCommand(Status.LOGIN, code);
-    }
-
-    private static int indexOfWhitespace(String value) {
-        for (int i = 0; i < value.length(); i++) {
-            if (Character.isWhitespace(value.charAt(i))) {
-                return i;
-            }
-        }
-        return -1;
     }
 }

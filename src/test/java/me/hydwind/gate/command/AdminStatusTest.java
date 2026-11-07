@@ -33,8 +33,8 @@ class AdminStatusTest {
                 session(3, LoginSession.Status.AUTHENTICATED, null),
                 session(4, LoginSession.Status.AUTHENTICATED, NOW.minusSeconds(30)));
 
-        AdminStatus status = AdminStatus.from(sessions, 3, HealthResult.healthy(42),
-                freshPolicy(), NOW);
+        AdminStatus status = AdminStatus.from(sessions, List.of("A", "B", "C"),
+                HealthResult.healthy(42), freshPolicy(), NOW);
 
         assertEquals(3, status.limboPlayers());
         assertEquals(2, status.pending());
@@ -52,8 +52,8 @@ class AdminStatusTest {
                 session(1, LoginSession.Status.PENDING, null),
                 session(2, LoginSession.Status.AUTHENTICATED, NOW.minusSeconds(30)));
 
-        AdminStatus status = AdminStatus.from(sessions, 2, HealthResult.healthy(42),
-                freshPolicy(), NOW);
+        AdminStatus status = AdminStatus.from(sessions, List.of("One", "Two"),
+                HealthResult.healthy(42), freshPolicy(), NOW);
         List<String> lines = status.lines(AdminMessages.defaults(), "hydwind.admin", TIME);
 
         assertTrue(lines.contains("Limbo 中: 2"), () -> "缺少 limbo 玩家数: " + lines);
@@ -69,7 +69,8 @@ class AdminStatusTest {
         RestartPolicy policy = freshPolicy();
         assertTrue(policy.tryAcquire(NOW));
 
-        AdminStatus status = AdminStatus.from(List.of(), 0, HealthResult.unhealthy(), policy, NOW);
+        AdminStatus status = AdminStatus.from(List.of(), List.of(), HealthResult.unhealthy(),
+                policy, NOW);
         List<String> lines = status.lines(AdminMessages.defaults(), "hydwind.admin", TIME);
 
         assertTrue(status.nextAllowed().isPresent());
@@ -82,11 +83,39 @@ class AdminStatusTest {
     void plainAuthenticatedMessageIsUsedWithoutGraceRecords() {
         AdminStatus status = AdminStatus.from(
                 List.of(session(1, LoginSession.Status.AUTHENTICATED, null)),
-                0, HealthResult.healthy(1), freshPolicy(), NOW);
+                List.of(), HealthResult.healthy(1), freshPolicy(), NOW);
 
         List<String> lines = status.lines(AdminMessages.defaults(), "hydwind.admin", TIME);
 
         assertTrue(lines.contains("已认证: 1"), () -> "无宽限时不应显示宽限文案: " + lines);
+    }
+
+    @Test
+    void listsLimboPlayerNamesWhenPresent() {
+        AdminStatus status = AdminStatus.from(List.of(), List.of("Bob", "Alice"),
+                HealthResult.healthy(1), freshPolicy(), NOW);
+
+        List<String> lines = status.lines(AdminMessages.defaults(), "hydwind.admin", TIME);
+
+        assertEquals(2, status.limboPlayers());
+        assertTrue(lines.contains("Limbo 玩家: Alice, Bob"), () -> "缺少 limbo 玩家名: " + lines);
+        assertTrue(lines.contains("Limbo 中: 2"), () -> "缺少 limbo 人数: " + lines);
+    }
+
+    @Test
+    void capsLimboPlayerNamesAtTwentyAndReportsTheTotal() {
+        List<String> names = new java.util.ArrayList<>();
+        for (int i = 1; i <= 25; i++) {
+            names.add("P%02d".formatted(i));
+        }
+
+        AdminStatus status = AdminStatus.from(List.of(), names,
+                HealthResult.healthy(1), freshPolicy(), NOW);
+        List<String> lines = status.lines(AdminMessages.defaults(), "hydwind.admin", TIME);
+
+        String expected = "Limbo 玩家: " + String.join(", ",
+                names.subList(0, AdminStatus.MAX_LIMBO_NAMES)) + " 等 25 人";
+        assertTrue(lines.contains(expected), () -> "应最多列出 20 个玩家名: " + lines);
     }
 
     private static RestartPolicy freshPolicy() {

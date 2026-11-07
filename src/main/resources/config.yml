@@ -1,5 +1,6 @@
 # HydwindGate 配置（Velocity 版）。
 # 修改后可通过 /hydwind reload 热重载；进行中的登录会话不会被中断。
+# 注意：提示间隔与登录超时只对之后进入 limbo 的会话生效；limbo.world / limbo.spawn 需重启代理。
 
 website:
   # 网站根地址，插件据此拼接 /gate、健康检查路径与 /api/plugin/login/verify。
@@ -54,8 +55,10 @@ messages:
   login-success-admin: "管理员 {name} 登录成功，欢迎回来！"
   service-unavailable: "认证服务暂时不可用，请稍后重试。"
   service-misconfigured: "认证服务配置异常，请联系管理员。"
+  forbidden: "网站拒绝了本次登录请求，请联系管理员。"
+  not-found: "登录接口不存在，请联系管理员检查网站配置。"
   session-timeout: "登录超时，请重新进服完成认证。"
-  invalid-code: "登录码不存在，请检查后重新输入。"
+  invalid-code: "登录码不存在，请检查后重新输入。如果没有账号，请到 QQ 群私聊机器人注册 游戏ID。"
   expired-code: "登录码已过期，请回到网站重新获取。"
   used-code: "登录码已被使用，请回到网站重新获取。"
   game-id-mismatch: "网站账号名与你的游戏 ID 不一致，请使用与游戏 ID 相同的账号登录。"
@@ -63,12 +66,15 @@ messages:
   code-too-long: "登录码过长，请检查后重新输入。"
   rate-limited: "尝试过多，请 {seconds} 秒后再试。"
   rate-limited-no-retry: "尝试过多，请稍后再试。"
+  rate-limited-with-attempts: "尝试过多，请 {seconds} 秒后再试，剩余 {attempts} 次。"
+  rate-limited-no-retry-with-attempts: "尝试过多，请稍后再试，剩余 {attempts} 次。"
   empty-code: "请先填写登录码，或使用 /login <登录码>。"
   verifying: "正在验证登录码，请稍候…"
   already-authenticated: "你已经完成认证，可以直接游戏。"
+  status-unverified: "当前状态：尚未认证。"
   admin:
     # /hydwind 命令文案；{player}、{permission}、{count}、{grace}、
-    # {uptime}、{remaining}、{time}、{error} 会按上下文替换。
+    # {uptime}、{remaining}、{time}、{error}、{players} 会按上下文替换。
     no-permission: "你没有权限使用 /hydwind（需要 {permission}）。"
     usage: "用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>"
     unknown-subcommand: "未知子命令。用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>"
@@ -83,6 +89,7 @@ messages:
     kicked-player: "你已被管理员踢出服务器。"
     kicked: "已踢出玩家 {player} 并清理会话。"
     status-limbo: "Limbo 中: {count}"
+    status-limbo-names: "Limbo 玩家: {players}"
     status-pending: "待认证: {count}"
     status-authenticated: "已认证: {count}"
     status-authenticated-grace: "已认证: {count}（其中离线宽限 {grace}）"

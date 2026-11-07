@@ -2,6 +2,7 @@ package me.hydwind.gate.login;
 
 import java.util.Objects;
 import me.hydwind.gate.ui.Messages;
+import me.hydwind.gate.ui.Templates;
 import me.hydwind.gate.web.VerifyResult;
 
 /**
@@ -23,16 +24,19 @@ public record LoginFeedback(boolean authenticated, boolean triggerRestart, Strin
 
         return switch (result.status()) {
             case OK -> new LoginFeedback(true, false,
-                    fill(adminRole(result) ? messages.loginSuccessAdmin() : messages.loginSuccess(),
+                    Templates.fill(adminRole(result) ? messages.loginSuccessAdmin() : messages.loginSuccess(),
                             "name", displayName(result, gameId)));
             case UNAUTHORIZED -> new LoginFeedback(false, false, messages.serviceMisconfigured());
+            case FORBIDDEN -> new LoginFeedback(false, false, messages.forbidden());
+            case NOT_FOUND -> new LoginFeedback(false, false, messages.notFound());
             case INVALID_CODE -> new LoginFeedback(false, false, messages.invalidCode());
             case EXPIRED -> new LoginFeedback(false, false, messages.expiredCode());
             case USED -> new LoginFeedback(false, false, messages.usedCode());
             case GAME_ID_MISMATCH -> new LoginFeedback(false, false,
                     isBlank(result.expectedGameId())
                             ? messages.gameIdMismatch()
-                            : fill(messages.gameIdMismatchExpected(), "expectedGameId", result.expectedGameId()));
+                            : Templates.fill(messages.gameIdMismatchExpected(),
+                                    "expectedGameId", result.expectedGameId()));
             case RATE_LIMITED -> new LoginFeedback(false, false, rateLimitMessage(result, messages));
             case UNREACHABLE -> new LoginFeedback(false, true, messages.serviceUnavailable());
         };
@@ -40,11 +44,18 @@ public record LoginFeedback(boolean authenticated, boolean triggerRestart, Strin
 
     private static String rateLimitMessage(VerifyResult result, Messages messages) {
         Long retryAfterMs = result.retryAfterMs();
+        Integer attemptsRemaining = result.attemptsRemaining();
         if (retryAfterMs == null) {
-            return messages.rateLimitedNoRetry();
+            return attemptsRemaining == null
+                    ? messages.rateLimitedNoRetry()
+                    : Templates.fill(messages.rateLimitedNoRetryWithAttempts(),
+                            "attempts", attemptsRemaining);
         }
         long seconds = Math.max(1L, (retryAfterMs + 999L) / 1000L);
-        return fill(messages.rateLimited(), "seconds", Long.toString(seconds));
+        return attemptsRemaining == null
+                ? Templates.fill(messages.rateLimited(), "seconds", Long.toString(seconds))
+                : Templates.fill(messages.rateLimitedWithAttempts(),
+                        "seconds", Long.toString(seconds), "attempts", attemptsRemaining);
     }
 
     private static String displayName(VerifyResult result, String gameId) {
@@ -59,10 +70,6 @@ public record LoginFeedback(boolean authenticated, boolean triggerRestart, Strin
 
     private static boolean adminRole(VerifyResult result) {
         return "admin".equalsIgnoreCase(result.role());
-    }
-
-    private static String fill(String template, String placeholder, String value) {
-        return template.replace("{" + placeholder + "}", value == null ? "" : value);
     }
 
     private static boolean isBlank(String value) {

@@ -169,8 +169,8 @@ class HttpWebsiteClientTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {403, 404, 500, 502})
-    void unexpectedStatusCodesAreUnreachable(int status) {
+    @ValueSource(ints = {500, 502})
+    void serverErrorsAreUnreachable(int status) {
         server.createContext("/api/plugin/login/verify",
                 exchange -> respond(exchange, status, "{}"));
 
@@ -178,6 +178,14 @@ class HttpWebsiteClientTest {
                 .verify("code", "Player_1", UUID.randomUUID());
 
         assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+    }
+
+    @Test
+    void forbiddenAndMissingEndpointsHaveExplicitStatuses() {
+        assertEquals(VerifyResult.Status.FORBIDDEN,
+                HttpWebsiteClient.mapVerifyResponse(403, "{\"reason\":\"forbidden\"}").status());
+        assertEquals(VerifyResult.Status.NOT_FOUND,
+                HttpWebsiteClient.mapVerifyResponse(404, "{\"reason\":\"not_found\"}").status());
     }
 
     @Test
@@ -214,7 +222,7 @@ class HttpWebsiteClientTest {
             unusedPort = socket.getLocalPort();
         }
         HttpWebsiteClient client = new HttpWebsiteClient(
-                new PluginConfig("http://127.0.0.1:" + unusedPort, "test-token", 500, 500));
+                config("http://127.0.0.1:" + unusedPort, "test-token", 500, 500));
 
         VerifyResult result = client.verify("code", "Player_1", UUID.randomUUID());
 
@@ -291,13 +299,22 @@ class HttpWebsiteClientTest {
             unusedPort = socket.getLocalPort();
         }
         HttpWebsiteClient client = new HttpWebsiteClient(
-                new PluginConfig("http://127.0.0.1:" + unusedPort, "test-token", 500, 500));
+                config("http://127.0.0.1:" + unusedPort, "test-token", 500, 500));
 
         assertFalse(client.health().healthy());
     }
 
     private HttpWebsiteClient client(int connectMillis, int readMillis) {
-        return new HttpWebsiteClient(new PluginConfig(baseUrl, "test-token", connectMillis, readMillis));
+        return new HttpWebsiteClient(config(baseUrl, "test-token", connectMillis, readMillis));
+    }
+
+    private static PluginConfig config(String baseUrl, String token, int connectMillis, int readMillis) {
+        return PluginConfig.from(Map.<String, Object>of(
+                "website", Map.<String, Object>of(
+                        "base-url", baseUrl,
+                        "token", token,
+                        "connect-timeout-millis", connectMillis,
+                        "read-timeout-millis", readMillis)), null);
     }
 
     private static void sleepQuietly(long millis) {

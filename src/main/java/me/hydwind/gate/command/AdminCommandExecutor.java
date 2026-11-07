@@ -5,6 +5,7 @@ import com.velocitypowered.api.proxy.Player;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,6 +13,7 @@ import me.hydwind.gate.HydwindGatePlugin;
 import me.hydwind.gate.auth.LoginSession;
 import me.hydwind.gate.login.LimboLoginService;
 import me.hydwind.gate.ui.AdminMessages;
+import me.hydwind.gate.ui.Templates;
 import me.hydwind.gate.web.HealthResult;
 import net.kyori.adventure.text.Component;
 
@@ -39,7 +41,7 @@ public final class AdminCommandExecutor {
         String permission = plugin.pluginConfig().adminPermission();
         AdminMessages admin = plugin.messages().admin();
         if (!source.hasPermission(permission)) {
-            send(source, fill(admin.noPermission(), "permission", permission));
+            send(source, Templates.fill(admin.noPermission(), "permission", permission));
             return;
         }
 
@@ -69,9 +71,12 @@ public final class AdminCommandExecutor {
             }
 
             Instant now = plugin.clock().instant();
+            List<String> limboPlayerNames = limboService.limboPlayers().stream()
+                    .map(LimboLoginService.LimboResident::gameId)
+                    .toList();
             AdminStatus status = AdminStatus.from(
                     plugin.sessionStore().snapshot(),
-                    limboService.limboPlayerCount(),
+                    limboPlayerNames,
                     health,
                     plugin.restartPolicy(),
                     now);
@@ -88,7 +93,7 @@ public final class AdminCommandExecutor {
                 send(source, admin.reloaded());
             } catch (RuntimeException exception) {
                 plugin.logger().error("Configuration reload failed.", exception);
-                send(source, fill(admin.reloadFailed(), "error",
+                send(source, Templates.fill(admin.reloadFailed(), "error",
                         exception.getMessage() == null ? exception.getClass().getSimpleName()
                                 : exception.getMessage()));
             }
@@ -103,11 +108,11 @@ public final class AdminCommandExecutor {
 
         Optional<LoginSession> session = plugin.sessionStore().findByGameId(playerName);
         if (session.isEmpty()) {
-            send(source, fill(admin.sessionNotFound(), "player", playerName));
+            send(source, Templates.fill(admin.sessionNotFound(), "player", playerName));
             return;
         }
         if (session.get().isAuthenticated()) {
-            send(source, fill(admin.alreadyAuthenticated(), "player", session.get().gameId()));
+            send(source, Templates.fill(admin.alreadyAuthenticated(), "player", session.get().gameId()));
             return;
         }
 
@@ -118,7 +123,7 @@ public final class AdminCommandExecutor {
             // 玩家可能已断线但会话仍在；管理员放行仍然生效。
             plugin.sessionStore().forceAuthenticate(uuid, plugin.clock().instant());
         }
-        send(source, fill(admin.approved(), "player", session.get().gameId()));
+        send(source, Templates.fill(admin.approved(), "player", session.get().gameId()));
     }
 
     private void kick(CommandSource source, AdminMessages admin, String playerName) {
@@ -130,7 +135,7 @@ public final class AdminCommandExecutor {
         Optional<LoginSession> session = plugin.sessionStore().findByGameId(playerName);
         Optional<Player> online = plugin.proxyServer().getPlayer(playerName);
         if (session.isEmpty() && online.isEmpty()) {
-            send(source, fill(admin.sessionNotFound(), "player", playerName));
+            send(source, Templates.fill(admin.sessionNotFound(), "player", playerName));
             return;
         }
 
@@ -147,14 +152,10 @@ public final class AdminCommandExecutor {
             online.or(() -> plugin.proxyServer().getPlayer(uuid))
                     .ifPresent(player -> player.disconnect(Component.text(admin.kickedPlayer())));
         }
-        send(source, fill(admin.kicked(), "player", displayName));
+        send(source, Templates.fill(admin.kicked(), "player", displayName));
     }
 
     private static void send(CommandSource source, String message) {
         source.sendMessage(Component.text(message));
-    }
-
-    private static String fill(String template, String placeholder, String value) {
-        return template.replace("{" + placeholder + "}", value == null ? "" : value);
     }
 }

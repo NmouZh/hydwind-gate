@@ -119,7 +119,7 @@ class RestartTriggerTest {
     }
 
     private RestartTrigger trigger(RestartSettings settings) {
-        return new RestartTrigger(website, new RestartPolicy(), settings, clock, LOGGER);
+        return new RestartTrigger(website, new RestartPolicy(RestartSettings.DEFAULT), settings, clock, LOGGER);
     }
 
     private static RestartSettings settings(Path path) {

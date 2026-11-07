@@ -5,7 +5,6 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.Player;
-import java.net.InetSocketAddress;
 import me.hydwind.gate.HydwindGatePlugin;
 import me.hydwind.gate.auth.LoginSession;
 import net.elytrium.limboapi.api.event.LoginLimboRegisterEvent;
@@ -47,7 +46,8 @@ public final class LoginGateListener {
     public void onLoginLimboRegister(LoginLimboRegisterEvent event) {
         Player player = event.getPlayer();
         LoginSession session = plugin.sessionStore().join(
-                player.getUniqueId(), player.getUsername(), remoteIp(player), plugin.clock().instant());
+                player.getUniqueId(), player.getUsername(),
+                RemoteAddress.remoteIp(player.getRemoteAddress()), plugin.clock().instant());
 
         if (session.isAuthenticated()) {
             // LimboAPI 要等事件处理完才建立登录队列；队列存在前 passLoginLimbo 是空操作，
@@ -82,15 +82,5 @@ public final class LoginGateListener {
             plugin.sessionStore().quit(player.getUniqueId(), plugin.clock().instant());
             player.disconnect(Component.text(plugin.messages().serviceMisconfigured()));
         }
-    }
-
-    private static String remoteIp(Player player) {
-        InetSocketAddress address = player.getRemoteAddress();
-        if (address == null) {
-            return "unknown";
-        }
-        return address.getAddress() == null
-                ? address.getHostString()
-                : address.getAddress().getHostAddress();
     }
 }

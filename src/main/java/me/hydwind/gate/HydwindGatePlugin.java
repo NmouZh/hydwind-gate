@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import me.hydwind.gate.auth.LoginSessionStore;
 import me.hydwind.gate.command.AdminCommandExecutor;
 import me.hydwind.gate.command.HydwindCommand;
+import me.hydwind.gate.compat.VersionCompat;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.config.RestartSettings;
 import me.hydwind.gate.login.LimboLoginService;
@@ -39,8 +40,9 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 /**
  * HydwindGate 的 Velocity 插件入口。
  *
- * <p>V1 只负责加载配置并装配可复用的网站客户端、会话存储与受控重启组件；
- * limbo 登录流程（V2）与管理命令（V3）会在此基础上注册监听器与命令。</p>
+ * <p>启动时检查 Velocity 版本与 LimboAPI 是否满足要求，然后装配网站客户端、
+ * 会话存储、受控重启组件、limbo 登录流程与 {@code /hydwind} 管理命令。
+ * 任何关键组件初始化失败都会关闭代理，避免在没有门禁的情况下放行玩家。</p>
  */
 @Plugin(
         id = "hydwind-gate",
@@ -84,6 +86,9 @@ public final class HydwindGatePlugin {
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
+        if (!ensureCompatibleRuntime()) {
+            return;
+        }
         loadConfiguration();
 
         limboLoginService = new LimboLoginService(this, server, logger);
@@ -133,6 +138,10 @@ public final class HydwindGatePlugin {
     /**
      * 重新读取 {@code config.yml} 并重建依赖配置的组件。会话存储与重启计数被保留，
      * 因此热重载不会打断进行中的登录，也不会清空重启冷却。
+     *
+     * <p>{@code auth.session-grace-seconds} 立即生效；{@code auth.prompt-interval-seconds}
+     * 与 {@code auth.login-timeout-seconds} 只对之后进入 limbo 的会话生效，因为已 spawn
+     * 的会话定时器无法安全重排。</p>
      */
     public void reloadConfiguration() {
         String previousLimbo = limboKey(pluginConfig);
@@ -179,6 +188,9 @@ public final class HydwindGatePlugin {
         // 只在首次装配，重载时保留内存中的认证会话与断线宽限记录。
         if (sessionStore == null) {
             sessionStore = new LoginSessionStore(config.reconnectGrace());
+        } else {
+            // 宽限时长可以在 reload 后立即生效，不影响已有会话。
+            sessionStore.setReconnectGrace(config.reconnectGrace());
         }
 
         this.pluginConfig = config;
@@ -186,6 +198,31 @@ public final class HydwindGatePlugin {
         this.websiteClient = client;
         this.restartTrigger = new RestartTrigger(client, restartPolicy, restartSettings,
                 clock, logger);
+    }
+
+    /**
+     * 启动前的运行时检查。Velocity 没有插件级“禁用” API，因此不兼容时记录明确错误
+     * 并关闭代理：宁可停机，也不要在没有门禁的情况下继续对外服务。
+     */
+    private boolean ensureCompatibleRuntime() {
+        String velocityVersion = server.getVersion().getVersion();
+        if (!VersionCompat.isSupportedVelocity(velocityVersion)) {
+            logger.error("HydwindGate requires Velocity {} or newer, but this proxy reports '{}'. "
+                            + "Shutting the proxy down instead of running without a login gate.",
+                    VersionCompat.MINIMUM_VELOCITY_VERSION, velocityVersion);
+            server.shutdown();
+            return false;
+        }
+
+        if (server.getPluginManager().getPlugin("limboapi").isEmpty()) {
+            logger.error("LimboAPI is not loaded; install limboapi-1.2.0.jar in the proxy plugins "
+                    + "directory. HydwindGate cannot gate players without limbo and will shut down.");
+            server.shutdown();
+            return false;
+        }
+
+        logger.info("Runtime checks passed: Velocity {}, LimboAPI present.", velocityVersion);
+        return true;
     }
 
     private Map<String, Object> readConfigFile() {

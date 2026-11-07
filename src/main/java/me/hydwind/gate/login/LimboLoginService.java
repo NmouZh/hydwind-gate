@@ -105,10 +105,6 @@ public final class LimboLoginService {
                 .toList();
     }
 
-    public int limboPlayerCount() {
-        return residents.size();
-    }
-
     /**
      * 管理员手动放行 limbo 中的玩家：先写会话状态（否则转服会被门禁拒绝），
      * 再让 session handler 停止提示并转到主服。
