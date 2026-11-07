@@ -65,6 +65,9 @@ dependencies {
 
     testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    // LoginGateListenerTest 直接引用 Velocity 的事件枚举；compileOnly 不会进入
+    // testCompileClasspath，因此测试需要单独声明依赖。
+    testImplementation("com.velocitypowered:velocity-api:4.1.2-SNAPSHOT")
     // RestartTrigger 使用 Velocity 的 SLF4J；测试需要 API 与一个简单绑定。
     testImplementation("org.slf4j:slf4j-api:2.0.19")
     testRuntimeOnly("org.slf4j:slf4j-simple:2.0.19")
