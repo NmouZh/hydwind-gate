@@ -1,12 +1,14 @@
 # HydwindGate 配置。
-# 修改后可通过 /hydwind reload 热重载（该命令由后续 ticket 提供）。
+# 修改后可通过 /hydwind reload 热重载；进行中的登录会话不会被中断。
 
 website:
-  # 网站根地址，插件据此拼接 /gate、/api/health 与 /api/plugin/login/verify。
+  # 网站根地址，插件据此拼接 /gate、健康检查路径与 /api/plugin/login/verify。
   base-url: "http://103.236.99.253:62179"
   # 网站插件令牌，与站务令牌分离。首次部署时填入。
   # 环境变量 HYDWIND_PLUGIN_TOKEN 非空时优先于此处。
   token: ""
+  # 健康检查路径（相对 base-url）。
+  health-path: "/api/health"
   # HTTP 连接与读取超时，单位毫秒。
   connect-timeout-millis: 3000
   read-timeout-millis: 5000
@@ -16,6 +18,21 @@ login:
   timeout-seconds: 300
   # 已认证玩家断线后，同 UUID + 同 IP 在此秒数内重连免登录。
   reconnect-grace-seconds: 300
+
+restart:
+  # 网站不可达且健康检查失败时写入的重启请求文件。
+  # 需要 systemd path unit 监听该文件；目录必须可写。
+  request-file: "/run/hydwind/restart-request"
+  # 两次触发之间的冷却时间。
+  cooldown-seconds: 600
+  # 每小时限额的滚动窗口。
+  window-seconds: 3600
+  # 窗口内最多触发次数；超限只记录告警。
+  max-per-window: 2
+
+admin:
+  # /hydwind 命令所需权限。plugin.yml 默认声明 hydwind.admin（op）。
+  permission: "hydwind.admin"
 
 spawn:
   # 登录冻结期间玩家被传送到的位置。

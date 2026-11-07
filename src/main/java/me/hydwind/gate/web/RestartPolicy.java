@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * 受控重启的准入策略：两次重启至少相隔 10 分钟，任意滚动一小时内最多 2 次。
@@ -17,7 +19,20 @@ public final class RestartPolicy {
     static final Duration WINDOW = Duration.ofHours(1);
     static final int MAX_PER_WINDOW = 2;
 
+    private final Duration cooldown;
+    private final Duration window;
+    private final int maxPerWindow;
     private final List<Instant> acquisitions = new ArrayList<>();
+
+    public RestartPolicy() {
+        this(COOLDOWN, WINDOW, MAX_PER_WINDOW);
+    }
+
+    public RestartPolicy(Duration cooldown, Duration window, int maxPerWindow) {
+        this.cooldown = Objects.requireNonNull(cooldown, "cooldown");
+        this.window = Objects.requireNonNull(window, "window");
+        this.maxPerWindow = maxPerWindow;
+    }
 
     /**
      * 尝试取得一次重启许可。允许时记录本次触发；拒绝时不做任何改变，
@@ -28,12 +43,12 @@ public final class RestartPolicy {
             throw new NullPointerException("now");
         }
         prune(now);
-        if (acquisitions.size() >= MAX_PER_WINDOW) {
+        if (acquisitions.size() >= maxPerWindow) {
             return false;
         }
         if (!acquisitions.isEmpty()) {
             Instant last = acquisitions.getLast();
-            if (now.isBefore(last.plus(COOLDOWN))) {
+            if (now.isBefore(last.plus(cooldown))) {
                 return false;
             }
         }
@@ -41,8 +56,38 @@ public final class RestartPolicy {
         return true;
     }
 
+    /** 当前还可用的重启额度，冷却期内为 0。 */
+    public synchronized int remaining(Instant now) {
+        Objects.requireNonNull(now, "now");
+        prune(now);
+        if (!acquisitions.isEmpty() && now.isBefore(acquisitions.getLast().plus(cooldown))) {
+            return 0;
+        }
+        return Math.max(0, maxPerWindow - acquisitions.size());
+    }
+
+    /** 冷却结束、额度恢复的最早时间；已有额度时为空。 */
+    public synchronized Optional<Instant> nextAllowed(Instant now) {
+        Objects.requireNonNull(now, "now");
+        prune(now);
+        if (remaining(now) > 0) {
+            return Optional.empty();
+        }
+        if (acquisitions.isEmpty()) {
+            return Optional.empty();
+        }
+        Instant cooldownEnd = acquisitions.getLast().plus(cooldown);
+        if (now.isBefore(cooldownEnd)) {
+            return Optional.of(cooldownEnd);
+        }
+        if (maxPerWindow > 0 && acquisitions.size() >= maxPerWindow) {
+            return Optional.of(acquisitions.getFirst().plus(window).plusNanos(1));
+        }
+        return Optional.empty();
+    }
+
     private void prune(Instant now) {
-        Instant cutoff = now.minus(WINDOW);
+        Instant cutoff = now.minus(window);
         acquisitions.removeIf(attempt -> !attempt.isAfter(cutoff));
     }
 }
