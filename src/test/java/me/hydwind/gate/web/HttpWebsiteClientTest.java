@@ -8,11 +8,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -145,6 +147,51 @@ class HttpWebsiteClientTest {
     }
 
     @Test
+    void successfulStatusWithFailedBodyIsUnreachable() {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, 200, "{\"ok\":false,\"reason\":\"nope\"}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+    }
+
+    @Test
+    void successBodyWithoutAccountIsUnreachable() {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, 200, "{\"ok\":true}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {403, 404, 500, 502})
+    void unexpectedStatusCodesAreUnreachable(int status) {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, status, "{}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+    }
+
+    @Test
+    void unknownConflictReasonIsUnreachable() {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, 409, "{\"ok\":false,\"reason\":\"something_new\"}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.UNREACHABLE, result.status());
+    }
+
+    @Test
     void reportsUnreachableWhenVerifyTimesOut() {
         server.createContext("/api/plugin/login/verify", exchange -> {
             sleepQuietly(1500);
@@ -207,6 +254,34 @@ class HttpWebsiteClientTest {
         HealthResult result = client(1000, 200).health();
 
         assertFalse(result.healthy());
+    }
+
+    @Test
+    void healthRequiresOkTrueInTheBody() {
+        server.createContext("/api/health",
+                exchange -> respond(exchange, 200, "{\"ok\":false,\"uptime\":9}"));
+
+        HealthResult result = client(300, 300).health();
+
+        assertFalse(result.healthy());
+        assertEquals(0L, result.uptimeSeconds());
+    }
+
+    @Test
+    void baseUrlTrailingSlashAndHealthPathWithoutLeadingSlashAreNormalized() {
+        server.createContext("/health", exchange -> respond(exchange, 200, "{\"ok\":true,\"uptime\":7}"));
+        PluginConfig config = PluginConfig.from(Map.<String, Object>of(
+                "website", Map.<String, Object>of(
+                        "base-url", baseUrl + "/",
+                        "token", "test-token",
+                        "connect-timeout-millis", 300,
+                        "read-timeout-millis", 300,
+                        "health-path", "health")), null);
+
+        HealthResult result = new HttpWebsiteClient(config).health();
+
+        assertTrue(result.healthy());
+        assertEquals(7L, result.uptimeSeconds());
     }
 
     @Test
