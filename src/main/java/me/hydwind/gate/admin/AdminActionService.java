@@ -66,13 +66,24 @@ public final class AdminActionService {
                 .orElse(playerName);
 
         // 先写会话状态：ServerPreConnectEvent 会拒绝未认证会话的转服。
-        sessions.forceAuthenticate(uuid, clock.instant());
+        boolean wroteSession = sessions.forceAuthenticate(uuid, clock.instant());
+        if (!wroteSession && sessions.find(uuid).map(LoginSession::isAuthenticated).orElse(false)) {
+            return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, displayName);
+        }
         if (resident.isPresent()) {
             boolean stillInLimbo = residents.approve(resident.get().uuid(), message);
             return new AdminResult(stillInLimbo
                     ? AdminResult.Kind.APPROVED_IN_LIMBO
                     : AdminResult.Kind.APPROVED_OFFLINE,
                     displayName);
+        }
+        // 关键竞态：查找 resident 时 handler 可能还没 register（onSpawn 尚未执行），
+        // 而 forceAuthenticate 已经写入。此时再查一次 resident；若它刚刚出现，
+        // 立即放行，避免玩家因为“两次检查都发生在写入之前”而永久卡在 limbo。
+        Optional<LimboResidents.Resident> lateResident = residents.find(playerName);
+        if (lateResident.isPresent()
+                && residents.approve(lateResident.get().uuid(), message)) {
+            return new AdminResult(AdminResult.Kind.APPROVED_IN_LIMBO, displayName);
         }
         // 仅剩会话：玩家已断线，放行状态会随宽限记录保留。
         return new AdminResult(AdminResult.Kind.APPROVED_OFFLINE, displayName);

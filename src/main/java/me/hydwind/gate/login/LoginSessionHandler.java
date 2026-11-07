@@ -42,8 +42,10 @@ import org.slf4j.Logger;
  * 因此登录码与 {@code /hydwind} 命令在这里分流。所有登录决策（提交、校验、超时）
  * 都委托给 {@link LoginFlow}；本类只保留平台动作：发消息、转服、断开与调度。</p>
  *
- * <p>玩家进服时的配置、文案与客户端引用在构造时各读取一次，之后按会话复用，
- * 不再在每次聊天/验证明细路径上反复经过插件的宽访问器。</p>
+ * <p>提交与超时走进服时冻结的引用：构造时各取一次文案与网站客户端，供
+ * {@link #onChat(String)} 的提交分支和超时任务使用。校验结果、提示与转服则在
+ * 触发时取当前代际快照（{@link RuntimeSnapshot}），避免 reload 后继续使用已关闭的
+ * {@code HttpClient} 或过期文案。</p>
  */
 public final class LoginSessionHandler implements LimboSessionHandler {
 
@@ -86,8 +88,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         this.config = plugin.pluginConfig();
         this.adminCommandExecutor = plugin.adminCommandExecutor();
         this.restartTrigger = plugin.restartTrigger();
-        // 插件暂未暴露 loginFlow()，登录编排在这里按本会话的引用装配一次；
-        // 会话内的文案与网站客户端因而固定在进服时刻，与旧定时器的行为一致。
+        // 提交与超时使用本会话冻结的 flow；校验/提示/转服在触发时另取当前代际。
         this.flow = new LoginFlow(sessionStore, plugin.websiteClient(), messages, clock);
         this.limboService = limboService;
     }
@@ -118,8 +119,14 @@ public final class LoginSessionHandler implements LimboSessionHandler {
 
         limboService.register(this);
 
-        // register 与上面的检查之间仍可能被管理员放行；再确认一次，避免错过转服。
-        if (!authenticated.get() && sessionAuthenticated()) {
+        // register 之后再加两道检查：
+        // 1. 管理员可能在 register 前后放行；
+        // 2. 连接可能在 register 之前已经断开（closed），不能留下僵尸登记。
+        if (closed.get()) {
+            limboService.unregister(uuid);
+            return;
+        }
+        if (authenticated.get() || sessionAuthenticated()) {
             authenticated.set(true);
             cancelTasks();
             transferToMainServer();
@@ -211,13 +218,16 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         proxyPlayer.disconnect(Component.text(message));
     }
 
+    /**
+     * 校验登录码。提交与超时使用进服时冻结的 flow；校验本身可能跨越一次
+     * {@code /hydwind reload}，因此这里重新取当前代际装配 LoginFlow，
+     * 不复用可能已关闭的旧客户端或过期文案。
+     */
     private void verify(long verificationId, String code) {
         if (closed.get()) {
             return;
         }
 
-        // 校验可能跨越一次 /hydwind reload：旧代际的 HttpClient 会被关闭，
-        // 因此这里取当前代际重新装配 LoginFlow，而不是复用进服时冻结的客户端。
         RuntimeSnapshot runtime = plugin.runtime().current();
         LoginFlow activeFlow = runtime == null
                 ? flow
@@ -235,14 +245,20 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             send(outcome.message());
         }
         if (outcome.triggerRestart() && !closed.get()) {
+            // 触发时必须用当前代际：进服时冻结的旧 trigger 持有已关闭的客户端，
+            // 会让健康检查永远报“传输失败”，从而发出假重启。
+            RestartTrigger activeTrigger = runtime == null ? restartTrigger : runtime.restartTrigger();
             // 健康检查与写文件可能耗时，放到调度线程，避免阻塞 Limbo 线程。
             server.getScheduler()
-                    .buildTask(plugin, restartTrigger::onUnreachable)
+                    .buildTask(plugin, activeTrigger::onUnreachable)
                     .schedule();
         }
     }
 
     private void transferToMainServer() {
+        if (closed.get()) {
+            return;
+        }
         RuntimeSnapshot runtime = plugin.runtime().current();
         String mainServer = runtime == null ? config.mainServer() : runtime.config().mainServer();
         Messages activeMessages = runtime == null ? messages : runtime.messages();
@@ -328,5 +344,17 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     public void shutdown() {
         closed.set(true);
         cancelTasks();
+    }
+
+    /**
+     * 60 秒 sweep 发现该会话已过期时调用。与 per-player 定时任务使用同一
+     * 终止路径，但由 sweep 驱动，保证定时器丢失时玩家仍会被踢出。
+     */
+    public void timeOutNow(String message) {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        cancelTasks();
+        proxyPlayer.disconnect(Component.text(message));
     }
 }

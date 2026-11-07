@@ -32,9 +32,11 @@ import me.hydwind.gate.command.AdminCommandExecutor;
 import me.hydwind.gate.command.HydwindCommand;
 import me.hydwind.gate.compat.LimboCompat;
 import me.hydwind.gate.compat.VersionCompat;
+import me.hydwind.gate.config.LimboSettings;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.config.RestartSettings;
 import me.hydwind.gate.login.LimboLoginService;
+import me.hydwind.gate.login.LimboSpawn;
 import me.hydwind.gate.login.LoginGateListener;
 import me.hydwind.gate.runtime.RuntimeHolder;
 import me.hydwind.gate.runtime.RuntimeSnapshot;
@@ -107,7 +109,8 @@ public final class HydwindGatePlugin {
 
         // 装配体的任何一步失败都不能继续以“无门禁”状态运行；统一关闭代理。
         try {
-            loadConfiguration();
+            // 首次启动允许 config.yml 缺失：从 jar 内复制默认配置后再读取。
+            loadConfiguration(true);
 
             limboLoginService = new LimboLoginService(this, server, logger);
             limboLoginService.initialize();
@@ -132,6 +135,16 @@ public final class HydwindGatePlugin {
             PluginConfig config = pluginConfig();
             logger.info("HydwindGate {} enabled (main server: {}, limbo world: {}).",
                     VERSION, config.mainServer(), config.limboWorld());
+            // 同时打印“配置值”与“生效值”：limbo 设置在 initialize 时固定，reload 只告警。
+            LimboSettings activeLimbo = limboLoginService.activeLimboSettings();
+            logger.info("Limbo settings: configured world '{}', spawn '{}'; active world '{}', spawn '{}'.",
+                    config.limboWorld(), config.limboSpawn(),
+                    activeLimbo.world(), activeLimbo.spawn());
+            if (!config.limboWorld().equals(activeLimbo.world())
+                    || !config.limboSpawn().equals(activeLimbo.spawn())) {
+                logger.warn("Configured limbo settings differ from the active ones; "
+                        + "restart the proxy to apply limbo.world / limbo.spawn.");
+            }
             logger.info("Website: {}, health path: {}, restart request: {}.",
                     config.websiteBaseUrl(), config.healthPath(),
                     config.restart().requestFile());
@@ -166,10 +179,15 @@ public final class HydwindGatePlugin {
      * <p>{@code auth.session-grace-seconds} 立即生效；{@code auth.prompt-interval-seconds}
      * 与 {@code auth.login-timeout-seconds} 只对之后进入 limbo 的会话生效，因为已 spawn
      * 的会话定时器无法安全重排。</p>
+     *
+     * <p>reload 期间 {@code config.yml} 缺失视为错误：不会重建默认配置，也不会替换
+     * 当前运行时代际。所有校验都在 {@link RuntimeHolder#publish} 之前完成，失败时
+     * 旧代际继续服务。</p>
      */
     public synchronized void reloadConfiguration() {
         PluginConfig previous = currentConfigOrNull();
-        loadConfiguration();
+        // reload 不创建默认配置：误删文件时保留当前配置，而不是悄悄恢复默认值。
+        loadConfiguration(false);
         PluginConfig current = pluginConfig();
         if (previous != null && !limboKey(previous).equals(limboKey(current))) {
             logger.warn("limbo.world or limbo.spawn changed; restart the proxy to apply them "
@@ -178,10 +196,6 @@ public final class HydwindGatePlugin {
         logger.info("Configuration reloaded; active login sessions were preserved.");
     }
 
-    /**
-     * 60 秒兜底 sweep：先按会话自己的 {@code loginDeadline} 标记超时（主要踢出路径仍是
-     * per-player 定时任务），再清理超过断线宽限的认证记录。
-     */
     /**
      * 把 Velocity 的在线玩家视图适配成 {@link AdminActionService.BackendPlayers}。
      * 管理动作 Module 只依赖这个窄 Interface，不直接认识 {@link ProxyServer}。
@@ -206,12 +220,25 @@ public final class HydwindGatePlugin {
         };
     }
 
+    /**
+     * 60 秒兜底 sweep：先按会话自己的 {@code loginDeadline} 标记超时（主要踢出路径仍是
+     * per-player 定时任务），再清理超过断线宽限的认证记录。
+     */
     private void expireDisconnectedSessions() {
         Instant now = clock.instant();
         List<LoginSession> timedOut = sessionStore.timeOutAll(now);
         if (!timedOut.isEmpty()) {
             logger.info("Timed out {} pending login session(s): {}",
                     timedOut.size(), timedOut.stream().map(LoginSession::gameId).toList());
+            // 只标记不踢人会让玩家卡在 limbo：sweep 必须驱动断开。
+            // per-player 定时器仍是主要路径；这里覆盖定时器丢失或先于它执行的情况。
+            String message = messages().sessionTimeout();
+            for (LoginSession session : timedOut) {
+                if (!limboLoginService.timeOut(session.uuid(), message)) {
+                    // 不在 limbo（已断线或已转服）时只需清掉过期会话。
+                    sessionStore.remove(session.uuid());
+                }
+            }
         }
         int removed = sessionStore.expireGrace(now);
         if (removed > 0) {
@@ -226,21 +253,33 @@ public final class HydwindGatePlugin {
     /**
      * 读取配置并构建、发布一整代运行时依赖。会话存储与重启策略是长生命周期对象：
      * 首次创建，之后只更新各自的配置项，不随代际替换。
+     *
+     * @param allowCreatingDefaultConfig 首次启动为 {@code true}，允许缺失时复制默认配置；
+     *                                   reload 为 {@code false}，缺失时直接失败
      */
-    private void loadConfiguration() {
-        Map<String, Object> raw = readConfigFile();
+    private void loadConfiguration(boolean allowCreatingDefaultConfig) {
+        Map<String, Object> raw = readConfigFile(allowCreatingDefaultConfig);
         PluginConfig config = PluginConfig.from(raw);
         Messages newMessages = Messages.from(raw);
+
+        // LimboSpawn.parse 对畸形文本静默回落默认出生点；这里提前提示，避免管理员
+        // 直到下次重启看到玩家出现在错误坐标才发现配置写错。只告警，不阻断加载。
+        LimboSettings limbo = config.limbo();
+        if (LimboSpawn.DEFAULT.equals(LimboSpawn.parse(limbo.spawn()))
+                && !limbo.spawn().equals(PluginConfig.DEFAULT_LIMBO_SPAWN)) {
+            logger.warn("limbo.spawn '{}' is not a valid spawn (expected 'x, y, z[, yaw, pitch]'); "
+                            + "the default {} will be used until the proxy restarts with a fixed value.",
+                    limbo.spawn(), PluginConfig.DEFAULT_LIMBO_SPAWN);
+        }
 
         if (config.pluginToken().isBlank()) {
             logger.warn("website.token is blank and {} is not set; website verification will fail with 401.",
                     PluginConfig.TOKEN_ENV);
         }
-        if (config.websiteBaseUrl().isBlank()) {
-            throw new IllegalStateException("website.base-url must not be blank");
-        }
-        // TODO: Messages.placeholderWarnings(raw) 落地后，在这里逐条记录 WARN（当前磁盘上的
-        // Messages 尚无该方法，按 ADR 由 ui 改造 Agent 提供，本文件暂不调用以免编译失败）。
+        // 自定义文案缺占位符时玩家会看到原样的 {xxx}；加载时提示管理员，但不改变替换行为。
+        Messages.placeholderWarnings(raw).forEach((key, placeholders) ->
+                logger.warn("Message '{}' is missing placeholder(s) {}; players will see them literally.",
+                        key, placeholders));
 
         RestartSettings restartSettings = config.restart();
         if (restartPolicy == null) {
@@ -327,11 +366,23 @@ public final class HydwindGatePlugin {
         return VersionCompat.isAtLeast(left, right) && VersionCompat.isAtLeast(right, left);
     }
 
-    private Map<String, Object> readConfigFile() {
+    /**
+     * 读取 {@code config.yml}。
+     *
+     * @param createDefaultIfMissing 启动时为 {@code true}，缺失则复制 jar 内默认配置；
+     *                               reload 时为 {@code false}，缺失直接失败，避免误删文件后
+     *                               把所有配置静默恢复默认值
+     * @throws IllegalStateException reload 时文件缺失，或读取失败
+     */
+    private Map<String, Object> readConfigFile(boolean createDefaultIfMissing) {
         Path configFile = dataDirectory.resolve(CONFIG_FILE);
         try {
             Files.createDirectories(dataDirectory);
             if (Files.notExists(configFile)) {
+                if (!createDefaultIfMissing) {
+                    throw new IllegalStateException(
+                            "config.yml is missing; reload aborted, keeping the current runtime");
+                }
                 copyDefaultConfig(configFile);
             }
             try (InputStream input = Files.newInputStream(configFile)) {

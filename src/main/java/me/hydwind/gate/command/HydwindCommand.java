@@ -1,11 +1,13 @@
 package me.hydwind.gate.command;
 
+import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.proxy.Player;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import me.hydwind.gate.HydwindGatePlugin;
+import me.hydwind.gate.runtime.RuntimeSnapshot;
 
 /**
  * Velocity {@code CommandManager} 注册的 {@code /hydwind} 命令。
@@ -30,7 +32,10 @@ public final class HydwindCommand implements SimpleCommand {
 
     @Override
     public List<String> suggest(Invocation invocation) {
-        if (!invocation.source().hasPermission(plugin.pluginConfig().adminPermission())) {
+        // 权限名也来自当前代际快照，不在补全路径上穿过 pluginConfig() 的宽访问器。
+        RuntimeSnapshot runtime = plugin.runtime().current();
+        if (runtime == null
+                || !hasAdminPermission(invocation.source(), runtime.config().adminPermission())) {
             return List.of();
         }
 
@@ -46,6 +51,14 @@ public final class HydwindCommand implements SimpleCommand {
             return playerNames(args[1]);
         }
         return List.of();
+    }
+
+    /**
+     * {@code /hydwind} 两个入口共用的权限谓词。Velocity 命令与 limbo {@code onChat}
+     * 都只通过这里判断管理员权限，避免两处规则漂移。
+     */
+    public static boolean hasAdminPermission(CommandSource source, String permission) {
+        return source != null && permission != null && source.hasPermission(permission);
     }
 
     private List<String> playerNames(String prefix) {

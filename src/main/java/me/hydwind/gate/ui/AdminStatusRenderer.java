@@ -27,7 +27,8 @@ public final class AdminStatusRenderer {
     }
 
     /**
-     * 渲染完整的状态行。grace、nextAllowed 等分支与旧版 {@code AdminStatus.lines} 保持一致。
+     * 渲染完整的状态行。排序、截断、grace 与 nextAllowed 等展示分支只在这里决定，
+     * {@code AdminStatus} 保持为原样的统计快照。
      *
      * @param status     状态快照
      * @param messages   管理员文案

@@ -95,6 +95,82 @@ class LoginSessionStoreTest {
     }
 
     @Test
+    void verificationIdsKeepIncreasingAcrossSessionsForTheSamePlayer() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        long firstId = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+
+        store.quit(PLAYER, START.plusSeconds(2));
+        LoginSession rejoined = join(store, PLAYER, "PlayerOne", START.plusSeconds(3));
+        assertEquals(LoginSession.Status.PENDING, rejoined.status());
+        assertEquals(0L, rejoined.verificationId(), "新会话自身尚未提交校验，编号为 0");
+
+        long secondId = store.beginVerification(PLAYER, START.plusSeconds(4)).orElseThrow();
+        assertEquals(firstId + 1, secondId, "校验编号必须跨会话单调递增，不能回到 1");
+
+        assertFalse(store.authenticationSucceeded(PLAYER, firstId, START.plusSeconds(5)),
+                "旧会话的迟到成功结果不能认证重连后的新会话");
+        assertFalse(store.authenticationFailed(PLAYER, firstId, START.plusSeconds(6)),
+                "旧会话的迟到失败结果不能打断重连后的新会话");
+        LoginSession stillVerifying = store.find(PLAYER).orElseThrow();
+        assertEquals(LoginSession.Status.VERIFYING, stillVerifying.status());
+        assertEquals(secondId, stillVerifying.verificationId());
+        assertTrue(store.authenticationSucceeded(PLAYER, secondId, START.plusSeconds(7)),
+                "当前会话的校验结果仍应正常生效");
+    }
+
+    @Test
+    void onlineAuthenticatedSessionWithDifferentIpRequiresFreshLogin() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        assertTrue(store.beginVerification(PLAYER, START.plusSeconds(1)).isPresent());
+        assertTrue(store.authenticationSucceeded(PLAYER, 1L, START.plusSeconds(2)));
+        assertEquals(null, store.find(PLAYER).orElseThrow().disconnectedAt(),
+                "仍在线会话的标志是 disconnectedAt 为空");
+
+        LoginSession differentIp = store.join(PLAYER, "PlayerOne", "198.51.100.7",
+                START.plusSeconds(3), LOGIN_TIMEOUT);
+
+        assertEquals(LoginSession.Status.PENDING, differentIp.status(),
+                "同 UUID 不同 IP 的在线连接不能直接继承认证，必须重新登录");
+        assertEquals("198.51.100.7", differentIp.ip());
+        assertEquals(START.plusSeconds(3), differentIp.enteredAt());
+        assertEquals(START.plusSeconds(3).plus(LOGIN_TIMEOUT), differentIp.loginDeadline());
+        assertEquals(0L, differentIp.verificationId());
+    }
+
+    @Test
+    void timeOutOnAnAlreadyTimedOutSessionStillAsksTheCallerToDisconnect() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT)), "首次超时应要求断开");
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(1)),
+                "sweep 与 per-player 定时器竞争时，后到的调用仍应要求断开");
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(2)),
+                "已超时会话持续返回 true，避免两个超时入口互相以为对方已经踢人");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(PLAYER).orElseThrow().status());
+    }
+
+    @Test
+    void successfulVerificationAfterDeadlineTimesOutInsteadOfAuthenticating() {
+        LoginSessionStore store = newStore();
+        join(store, PLAYER, "PlayerOne", START);
+        long id = store.beginVerification(PLAYER, START.plusSeconds(1)).orElseThrow();
+
+        assertFalse(store.authenticationSucceeded(PLAYER, id, START.plus(LOGIN_TIMEOUT).plusNanos(1)),
+                "超过 loginDeadline 的成功结果不得放行");
+
+        LoginSession timedOut = store.find(PLAYER).orElseThrow();
+        assertEquals(LoginSession.Status.TIMED_OUT, timedOut.status(),
+                "超过 deadline 的迟到成功结果应把会话落为 TIMED_OUT");
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(1)),
+                "TIMED_OUT 会话仍要求调用方断开连接");
+        assertFalse(store.authenticationSucceeded(PLAYER, id, START.plus(LOGIN_TIMEOUT).plusSeconds(2)),
+                "超时之后重复到达的成功结果同样不得放行");
+    }
+
+    @Test
     void timeOutFiresExactlyAtTheSessionsOwnDeadline() {
         LoginSessionStore store = newStore();
         join(store, PLAYER, "PlayerOne", START);
@@ -111,8 +187,11 @@ class LoginSessionStoreTest {
         assertEquals(START.plus(LOGIN_TIMEOUT), timedOut.loginDeadline());
         assertFalse(store.authenticationSucceeded(PLAYER, 1L, START.plus(LOGIN_TIMEOUT).plusSeconds(1)));
         assertTrue(store.beginVerification(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(2)).isEmpty());
-        assertFalse(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(3)),
-                "同一会话不应重复超时");
+        // 已标记超时的会话对再次调用仍返回 true：调用方（per-player 定时器或 sweep）
+        // 必须据此断开连接，不能因为别人已经标记过就放弃踢人。
+        assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT).plusSeconds(3)),
+                "已超时会话再次查询应仍要求调用方断开");
+        assertEquals(LoginSession.Status.TIMED_OUT, store.find(PLAYER).orElseThrow().status());
     }
 
     @Test
@@ -165,8 +244,8 @@ class LoginSessionStoreTest {
         assertEquals(START.plusSeconds(11).plus(LOGIN_TIMEOUT), differentIp.loginDeadline());
         assertEquals(0L, differentIp.verificationId());
 
-        assertTrue(store.beginVerification(PLAYER, START.plusSeconds(12)).isPresent());
-        assertTrue(store.authenticationSucceeded(PLAYER, 1L, START.plusSeconds(13)));
+        long secondId = store.beginVerification(PLAYER, START.plusSeconds(12)).orElseThrow();
+        assertTrue(store.authenticationSucceeded(PLAYER, secondId, START.plusSeconds(13)));
         store.quit(PLAYER, START.plusSeconds(20));
         LoginSession expired = store.join(PLAYER, "PlayerOne", "198.51.100.7", START.plusSeconds(320),
                 LOGIN_TIMEOUT);

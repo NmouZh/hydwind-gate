@@ -53,6 +53,28 @@ class AdminActionServiceTest {
     }
 
     @Test
+    void approveRechecksResidentThatRegistersAfterTheFirstLookup() {
+        joinSession();
+        // 模拟 onSpawn 尚未 register 的竞态：第一次 find 时 limbo 里还没有人，
+        // forceAuthenticate 写入后 handler 才完成注册，复查时才能看到玩家。
+        LateRegisteringResidents lateResidents =
+                new LateRegisteringResidents(sessions, PLAYER, NAME);
+        AdminActionService lateService = new AdminActionService(
+                sessions, lateResidents, backend, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        AdminResult result = lateService.approve(NAME, MESSAGE);
+
+        assertEquals(AdminResult.Kind.APPROVED_IN_LIMBO, result.kind(),
+                "复查时已注册的玩家必须放行，不能误报为 APPROVED_OFFLINE");
+        assertEquals(NAME, result.playerName());
+        assertTrue(sessions.find(PLAYER).orElseThrow().isAuthenticated());
+        assertEquals(2, lateResidents.findCalls,
+                "approve 必须在 forceAuthenticate 之后复查一次 resident");
+        assertEquals(List.of(approveEvent(PLAYER, true)), lateResidents.events,
+                "复查命中后必须实际调用 residents.approve，且此时会话已认证");
+    }
+
+    @Test
     void approveOfflineSessionReturnsApprovedOfflineAndAuthenticates() {
         joinSession();
 
@@ -178,6 +200,53 @@ class AdminActionServiceTest {
 
     private static String disconnectEvent(UUID uuid, boolean sessionPresent) {
         return "disconnect:" + uuid + ":sessionPresent=" + sessionPresent + ":" + MESSAGE;
+    }
+
+    /**
+     * 模拟 handler 在管理员操作期间才完成 register 的竞态：
+     * 第一次 {@link #find(String)} 返回空，之后的查找才返回 resident。
+     */
+    private static final class LateRegisteringResidents implements LimboResidents {
+
+        private final LoginSessionStore sessions;
+        private final Resident resident;
+        private final List<String> events = new ArrayList<>();
+        private int findCalls;
+
+        LateRegisteringResidents(LoginSessionStore sessions, UUID uuid, String gameId) {
+            this.sessions = sessions;
+            this.resident = new Resident(uuid, gameId);
+        }
+
+        @Override
+        public Optional<Resident> find(String gameId) {
+            findCalls++;
+            if (findCalls == 1) {
+                return Optional.empty();
+            }
+            return resident.gameId().equalsIgnoreCase(gameId)
+                    ? Optional.of(resident)
+                    : Optional.empty();
+        }
+
+        @Override
+        public List<Resident> all() {
+            return findCalls == 0 ? List.of() : List.of(resident);
+        }
+
+        @Override
+        public boolean approve(UUID uuid, String message) {
+            boolean authenticated = sessions.find(uuid)
+                    .map(LoginSession::isAuthenticated)
+                    .orElse(false);
+            events.add("approve:" + uuid + ":authenticated=" + authenticated + ":" + message);
+            return resident.uuid().equals(uuid);
+        }
+
+        @Override
+        public boolean kick(UUID uuid, String message) {
+            return false;
+        }
     }
 
     /** 记录 approve 时会话是否已认证、kick 时会话是否已移除。 */

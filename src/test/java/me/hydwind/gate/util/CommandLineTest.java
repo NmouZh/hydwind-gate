@@ -20,7 +20,7 @@ class CommandLineTest {
     }
 
     @Test
-    void preservesRemainderSpacesForKaomojiCodes() {
+    void preservesRemainderSpacesForEmoticonCodes() {
         CommandLine line = CommandLine.parse("login (・ω・) (´▽｀)");
 
         assertEquals("login", line.command());

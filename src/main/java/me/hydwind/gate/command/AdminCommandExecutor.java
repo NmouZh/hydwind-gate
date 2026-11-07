@@ -77,7 +77,7 @@ public final class AdminCommandExecutor {
 
         String permission = runtime.config().adminPermission();
         AdminMessages admin = runtime.messages().admin();
-        if (!source.hasPermission(permission)) {
+        if (!HydwindCommand.hasAdminPermission(source, permission)) {
             send(source, Templates.fill(admin.noPermission(), "permission", permission));
             return;
         }

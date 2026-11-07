@@ -38,7 +38,7 @@
 
 构建统一在 GitHub Actions 上运行（见 `.github/workflows/ci.yml`），**本地不执行 Gradle 构建**，以免环境差异掩盖问题。
 
-- 触发条件：推送到 `feat/**` / `fix/**`，或向 `feat/velocity-gate` 发起 Pull Request
+- 触发条件：推送到 `main`、`feat/**`（含 `feat/login-gate`）或 `fix/**`；或向 `main`、`feat/login-gate`、`feat/velocity-gate` 发起 Pull Request
 - 手动触发：仓库 **Actions** 页面选择 **CI** → **Run workflow**
 - 查看最近一次运行：`gh run list -R NmouZh/hydwind-gate --branch <分支名>`
 - 跟踪运行：`gh run watch <run-id> -R NmouZh/hydwind-gate`

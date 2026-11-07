@@ -22,6 +22,11 @@ import java.util.UUID;
 public final class LoginSessionStore {
 
     private final Map<UUID, LoginSession> sessions = new HashMap<>();
+    /**
+     * 每个 UUID 已分配过的最大校验编号。单独存放、跨会话不重置，
+     * 这样旧连接迟到的校验结果不会命中重连后新建的会话。
+     */
+    private final Map<UUID, Long> lastVerificationIds = new HashMap<>();
     private volatile Duration reconnectGrace;
 
     public LoginSessionStore(Duration reconnectGrace) {
@@ -52,8 +57,9 @@ public final class LoginSessionStore {
 
         LoginSession existing = sessions.get(uuid);
         if (existing != null && existing.isAuthenticated()) {
-            if (existing.disconnectedAt() == null) {
-                // 重复的进服事件：保持在线会话，仅刷新活动时间。
+            if (existing.disconnectedAt() == null && existing.matches(gameId, ip)) {
+                // 重复的进服事件：同一身份（游戏 ID + IP）才保持在线会话，仅刷新活动时间。
+                // 不同 IP 的同名连接不能直接继承认证，必须重新登录。
                 return update(existing.reconnectedAt(now));
             }
             if (withinGrace(existing, gameId, ip, now)) {
@@ -79,7 +85,8 @@ public final class LoginSessionStore {
         if (session == null || session.status() != LoginSession.Status.PENDING) {
             return OptionalLong.empty();
         }
-        long verificationId = session.verificationId() + 1;
+        // 编号按 UUID 全局单调递增，不随会话重建而回到 1。
+        long verificationId = lastVerificationIds.merge(uuid, 1L, Long::sum);
         sessions.put(uuid, session.transitionTo(LoginSession.Status.VERIFYING, now, verificationId));
         return OptionalLong.of(verificationId);
     }
@@ -92,6 +99,11 @@ public final class LoginSessionStore {
         LoginSession session = sessions.get(uuid);
         if (session == null || session.status() != LoginSession.Status.VERIFYING
                 || session.verificationId() != verificationId) {
+            return false;
+        }
+        if (now.isAfter(session.loginDeadline())) {
+            // 已过截止时刻：迟到的成功结果不得放行，交由超时路径处理。
+            sessions.put(uuid, session.transitionTo(LoginSession.Status.TIMED_OUT, now));
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.AUTHENTICATED, now));
@@ -115,12 +127,22 @@ public final class LoginSessionStore {
     /**
      * 到达会话自己的 {@code loginDeadline} 仍未认证则标记为 TIMED_OUT。
      *
-     * @return 本次调用是否完成了超时迁移
+     * <p>返回 {@code true} 表示调用方应断开该连接：既包括本次完成迁移，
+     * 也包括会话此前已被 60 秒 sweep 标记为 TIMED_OUT 的情况。这样两个
+     * 超时入口（per-player 定时器与 sweep）可以安全地竞争，不会互相抵消。</p>
+     *
+     * @return 调用方是否应断开该连接
      */
     public synchronized boolean timeOut(UUID uuid, Instant now) {
         Objects.requireNonNull(now, "now");
         LoginSession session = sessions.get(uuid);
-        if (session == null || !awaitingAuthentication(session) || now.isBefore(session.loginDeadline())) {
+        if (session == null) {
+            return false;
+        }
+        if (session.status() == LoginSession.Status.TIMED_OUT) {
+            return true;
+        }
+        if (!awaitingAuthentication(session) || now.isBefore(session.loginDeadline())) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.TIMED_OUT, now));

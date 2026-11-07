@@ -2,6 +2,7 @@ package me.hydwind.gate.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -171,22 +172,29 @@ class PluginConfigTest {
     }
 
     @Test
-    void unparsableNumbersFallBackToDefaults() {
-        Map<String, Object> root = Map.<String, Object>of(
-                "website", Map.<String, Object>of(
-                        "base-url", "http://example.test",
-                        "connect-timeout-millis", "nope",
-                        "read-timeout-millis", "also-nope"),
-                "auth", Map.<String, Object>of("prompt-interval-seconds", "abc"));
+    void unparsableNumericStringsFailLoadingInsteadOfFallingBackToDefaults() {
+        Map<String, Object> website = Map.of(
+                "base-url", "http://example.test",
+                "connect-timeout-millis", "nope");
+        IllegalArgumentException timeout = assertThrows(IllegalArgumentException.class,
+                () -> PluginConfig.from(Map.of("website", website), null));
+        assertEquals("config value 'connect-timeout-millis' is not a number: nope",
+                timeout.getMessage(), "以前会静默回退默认值，现在必须让加载失败");
 
-        PluginConfig config = PluginConfig.from(root, null);
+        Map<String, Object> auth = Map.of("prompt-interval-seconds", "abc");
+        IllegalArgumentException interval = assertThrows(IllegalArgumentException.class,
+                () -> PluginConfig.from(Map.of(
+                        "website", Map.of("base-url", "http://example.test"),
+                        "auth", auth), null));
+        assertEquals("config value 'prompt-interval-seconds' is not a number: abc",
+                interval.getMessage());
 
-        assertEquals(PluginConfig.DEFAULT_CONNECT_TIMEOUT_MILLIS, config.connectTimeoutMillis(),
-                "无法解析的字符串按缺项处理");
-        assertEquals(PluginConfig.DEFAULT_READ_TIMEOUT_MILLIS, config.readTimeoutMillis(),
-                "无法解析的字符串按缺项处理");
-        assertEquals(PluginConfig.DEFAULT_PROMPT_INTERVAL, config.promptInterval(),
-                "无法解析的字符串按缺项处理");
+        IllegalArgumentException loginTimeout = assertThrows(IllegalArgumentException.class,
+                () -> PluginConfig.from(Map.of(
+                        "website", Map.of("base-url", "http://example.test"),
+                        "auth", Map.of("login-timeout-seconds", "600s")), null));
+        assertTrue(loginTimeout.getMessage().contains("'login-timeout-seconds'"),
+                "600s 之类的时长写法必须在加载时报错，而不是变成 300 秒");
     }
 
     @Test
@@ -278,6 +286,33 @@ class PluginConfigTest {
                 () -> new WebsiteSettings(null, "token", 100, 100, "/api/health"));
         assertThrows(NullPointerException.class,
                 () -> new WebsiteSettings("http://example.test", null, 100, 100, "/api/health"));
+    }
+
+    @Test
+    void websiteSettingsRejectMalformedOrNonHttpBaseUrls() {
+        IllegalArgumentException malformed = assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("not a uri", "token", 100, 100, "/api/health"));
+        assertTrue(malformed.getMessage().startsWith("website.base-url is not a valid URI"),
+                "语法错误必须在加载时暴露，而不是等到每次请求变成契约不匹配");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("example.test", "token", 100, 100, "/api/health"),
+                "缺少 scheme 不是合法的网站根地址");
+        assertThrows(IllegalArgumentException.class,
+                () -> new WebsiteSettings("ftp://example.test", "token", 100, 100, "/api/health"),
+                "只接受 http 与 https");
+        assertThrows(IllegalArgumentException.class,
+                () -> PluginConfig.from(Map.of("website", Map.of(
+                        "base-url", "not a uri")), null),
+                "PluginConfig.from 也会在加载时失败");
+
+        // 现有的本地回环地址必须继续通过。
+        assertEquals("http://127.0.0.1:1",
+                new WebsiteSettings("http://127.0.0.1:1", "token", 100, 100, "/api/health")
+                        .baseUrl());
+        assertEquals("HTTPS://example.test",
+                new WebsiteSettings("HTTPS://example.test", "token", 100, 100, "/api/health")
+                        .baseUrl(), "scheme 比较忽略大小写，保存原始文本");
     }
 
     @Test

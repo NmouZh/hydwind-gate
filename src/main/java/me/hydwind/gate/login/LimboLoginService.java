@@ -88,12 +88,12 @@ public final class LimboLoginService implements LimboResidents {
                 settings.world(), spawn.x(), spawn.y(), spawn.z());
     }
 
-    /** 本代际生效的 limbo 设置；供日志与状态展示使用。 */
-    public LimboSettings activeSettings() {
-        return activeSettings;
-    }
-
-    /** ADR-0002 第 7 节约定的名称，等价于 {@link #activeSettings()}。 */
+    /**
+     * 本代际生效的 limbo 设置；供启动日志与状态展示使用。
+     *
+     * <p>值在 {@link #initialize()} 时固定，reload 不会替换，因此与当前
+     * {@code config.yml} 可能不同；调用方需要区分“配置值”与“生效值”。</p>
+     */
     public LimboSettings activeLimboSettings() {
         return activeSettings;
     }
@@ -141,11 +141,19 @@ public final class LimboLoginService implements LimboResidents {
     }
 
     /**
-     * 过渡期委托：保留方法名让尚未迁移的调用点（{@code AdminCommandExecutor}）继续编译，
-     * 新代码应直接使用 {@link #all()}。
+     * 让 60 秒 sweep 能真正踢掉已过期的 limbo 玩家：per-player 定时器仍是主要路径，
+     * 但定时器丢失时由这里兜底，避免只标记状态却没人断开。
+     *
+     * @return 该玩家是否仍在 limbo 并被断开
      */
-    public List<Resident> limboPlayers() {
-        return all();
+    public boolean timeOut(UUID uuid, String message) {
+        LoginSessionHandler handler = residents.get(uuid);
+        if (handler == null) {
+            return false;
+        }
+        // 断开路径会触发 onDisconnect → unregister，这里只负责调用。
+        handler.timeOutNow(message);
+        return true;
     }
 
     /**

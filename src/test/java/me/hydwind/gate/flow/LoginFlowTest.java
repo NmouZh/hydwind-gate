@@ -148,7 +148,8 @@ class LoginFlowTest {
         clock.advance(LOGIN_TIMEOUT.plusSeconds(1));
         assertTrue(flow.timeout(identity));
         assertEquals(LoginSession.Status.TIMED_OUT, session().status());
-        assertFalse(flow.timeout(identity), "同一会话不应重复超时");
+        // 已标记超时的会话仍返回 true：调用方必须据此断开，不能因为别人先标记过就放弃踢人。
+        assertTrue(flow.timeout(identity), "已超时会话再次查询应仍要求调用方断开");
     }
 
     @Test

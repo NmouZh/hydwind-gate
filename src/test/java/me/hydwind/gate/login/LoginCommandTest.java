@@ -25,7 +25,7 @@ class LoginCommandTest {
     }
 
     @Test
-    void preservesKaomojiCodeContainingSpaces() {
+    void preservesLoginCodeContainingSpaces() {
         LoginCommand command = LoginCommand.parse("/login (・ω・) (´▽｀)");
 
         assertEquals(LoginCommand.Status.LOGIN, command.status());

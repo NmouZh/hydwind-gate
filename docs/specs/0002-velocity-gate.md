@@ -10,7 +10,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
 
 - `LoginLimboRegisterEvent` 判断玩家是否需要认证；需要则用 LimboAPI 创建虚拟 limbo 并把玩家放进去。
 - limbo 内通过 Adventure 发送聊天/标题/可点击网址，说明「打开 `/gate` 登录，然后 `/login <码>`」。
-- `LimboSessionHandler#onChat` 解析 `/login <码>`（LimboAPI 会吞掉聊天和命令，不经过 Velocity CommandManager），调用网站 `/api/plugin/login/verify`。
+- `LimboSessionHandler#onChat` 解析 `/login <码>`（LimboAPI 会吞掉聊天和命令，不经过 Velocity CommandManager），交给 `flow/LoginFlow.submit`，由它调用网站 `/api/plugin/login/verify`。
 - 成功：记录会话，`LimboPlayer#disconnect(主服)`；失败：提示原因；5 分钟未登录踢出。
 - 网站 API 不变；复用 `WebsiteClient`、`LoginCode`（原 `KaomojiCode`）、`LoginSessionStore`、`RestartPolicy`、`RestartTrigger`。
 - 登录决策集中到 `flow/LoginFlow`，管理操作集中到 `admin/AdminActionService`，命令语法集中到 `command/CommandGrammar`；运行时代际由 `RuntimeHolder` 整体替换。
@@ -122,7 +122,7 @@ VC 服是 **Velocity 代理**，不是 Paper 服务端。现有 `hydwind-gate` �
   - `auth.login-timeout-seconds`、`auth.session-grace-seconds`、`auth.prompt-interval-seconds`
   - `limbo.world`、`limbo.spawn`
   - `server.main`（认证后转服目标）
-  - `restart.request-path`、`restart.cooldown-seconds`、`restart.max-per-hour`
+  - `restart.request-path`、`restart.cooldown-seconds`、`restart.max-per-hour`、`restart.window-seconds`
   - `admin.permission`（默认 `hydwind.admin`）
   - `messages`（网址、提示、错误、超时）
 - 新增窄设置 record `WebsiteSettings`、`AuthSettings`、`LimboSettings`、`AdminSettings`、`ServerSettings`，由 `PluginConfig#website()`、`auth()`、`limbo()`、`admin()`、`server()` 暴露；`restart` 继续使用 `RestartSettings`。校验集中在配置构造阶段（`PluginConfig` 及其窄设置 record）：base-url 非空、超时与时长均为正；非法值让启动或 reload 失败，不再静默回退默认值。`HttpWebsiteClient` 不再自行做 `positiveOrDefault` 兜底。

@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — 2026-11-07（实施中）
+Accepted — 2026-11-07（已实施 2026-11-08）
+
+## Related
+
+- 细化但不取代 [ADR-0001: 用 Velocity 插件而不是 Paper 后端插件](0001-velocity-over-paper.md)。
+  ADR-0001 决定平台（单 Velocity 插件 + LimboAPI），本 ADR 只决定该插件内部的门禁流程结构；
+  两者是补充关系，不是 supersedes。
 
 ## Context
 
@@ -190,3 +196,20 @@ public static boolean requiresTarget(AdminCommandRequest.Type type);
 - 不运行 Gradle / 测试（工作区规则）；本地只做 `javac` 语法检查由集成阶段统一执行。
 - 每个 Agent 只改自己名下的文件；跨文件签名变更由 ADR 冻结。
 - 注释用中文，风格与现有代码一致。
+
+## Implementation notes
+
+实施与冻结签名存在以下偏差，均已在代码中落地：
+
+- `AdminActionService` 不直接依赖 Velocity 的 `ProxyServer`，改用窄接口
+  `AdminActionService.BackendPlayers`（`findOnline` / `disconnect` / `nameOf`）访问后端在线玩家，
+  便于用测试替身覆盖；`approve` / `kick` 额外接收 `message` 参数，由 Adapter 从当前配置取文案，
+  编排层不依赖 `Messages`。
+- 配置校验放在窄设置 record（`WebsiteSettings`、`AuthSettings`、`LimboSettings`、`AdminSettings`、
+  `ServerSettings`）的紧凑构造器里，`PluginConfig` 只负责组装与转发；`HttpWebsiteClient`
+  因此不再做 `positiveOrDefault` 之类的兜底。
+- `HttpWebsiteClient.close()` 不调用 `HttpClient.close()`：后者会阻塞等待在途请求，
+  而 reload 发生在代理调度线程上。实现改为设置 `closed` 标志，让后续请求立即返回
+  契约不匹配（避免伪装成传输层失败）；旧连接池随代际被 GC 回收。
+- `LimboLoginService` 在 `initialize()` 时固定 `LimboSettings`，通过 `activeLimboSettings()`
+  暴露给启动日志；日志同时打印配置值与生效值，二者不同时提示重启代理。

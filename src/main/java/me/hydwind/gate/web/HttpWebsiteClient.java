@@ -29,10 +29,12 @@ import java.util.UUID;
 public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
 
     private static final String VERIFY_PATH = "/api/plugin/login/verify";
-    private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
-    private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
     private static final Duration HEALTH_MAX_TIMEOUT = Duration.ofSeconds(2);
 
+    /**
+     * 请求在进入网络层之前就失败（URL 非法、请求构造失败等）时使用的可观察探测：
+     * 这些异常来自本 Adapter 的配置/构造，而不是传输层，因此不能算“网站不健康”。
+     */
     private final HttpClient httpClient;
     private final String baseUrl;
     private final String pluginToken;
@@ -41,18 +43,13 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
 
     public HttpWebsiteClient(PluginConfig config) {
         Objects.requireNonNull(config, "config");
-        String url = Objects.requireNonNull(config.websiteBaseUrl(), "website base URL").trim();
-        if (url.isEmpty()) {
-            throw new IllegalArgumentException("website base URL must not be blank");
-        }
-        this.baseUrl = Urls.stripTrailingSlashes(url);
+        // 校验已在 WebsiteSettings 的紧凑构造器完成，这里只做规范化。
+        this.baseUrl = Urls.stripTrailingSlashes(config.websiteBaseUrl().trim());
         this.pluginToken = config.pluginToken() == null ? "" : config.pluginToken();
-        this.readTimeout = Duration.ofMillis(positiveOrDefault(
-                config.readTimeoutMillis(), DEFAULT_READ_TIMEOUT_MILLIS));
+        this.readTimeout = Duration.ofMillis(config.readTimeoutMillis());
         this.healthPath = normalizePath(config.healthPath());
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(positiveOrDefault(
-                        config.connectTimeoutMillis(), DEFAULT_CONNECT_TIMEOUT_MILLIS)))
+                .connectTimeout(Duration.ofMillis(config.connectTimeoutMillis()))
                 .build();
     }
 
@@ -61,19 +58,29 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
         Objects.requireNonNull(code, "code");
         Objects.requireNonNull(gameId, "gameId");
         Objects.requireNonNull(uuid, "uuid");
+        if (closed) {
+            // 旧代际已被 reload 替换；调用方应改用当前快照。
+            return VerifyResult.contractMismatch();
+        }
 
         JsonObject payload = new JsonObject();
         payload.addProperty("code", code);
         payload.addProperty("gameId", gameId);
         payload.addProperty("uuid", uuid.toString());
 
-        HttpRequest request = HttpRequest.newBuilder(uri(VERIFY_PATH))
-                .timeout(readTimeout)
-                .header("Authorization", "Bearer " + pluginToken)
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
-                .build();
+        HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder(uri(VERIFY_PATH))
+                    .timeout(readTimeout)
+                    .header("Authorization", "Bearer " + pluginToken)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
+                    .build();
+        } catch (RuntimeException e) {
+            // 非法 URL / 非法 header 属于插件配置问题，不是网站不可达。
+            return VerifyResult.contractMismatch();
+        }
 
         try {
             HttpResponse<String> response =
@@ -90,12 +97,21 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
 
     @Override
     public HealthResult health() {
+        if (closed) {
+            return HealthResult.unhealthyContract();
+        }
         Duration timeout = readTimeout.compareTo(HEALTH_MAX_TIMEOUT) < 0 ? readTimeout : HEALTH_MAX_TIMEOUT;
-        HttpRequest request = HttpRequest.newBuilder(uri(healthPath))
-                .timeout(timeout)
-                .header("Accept", "application/json")
-                .GET()
-                .build();
+        HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder(uri(healthPath))
+                    .timeout(timeout)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+        } catch (RuntimeException e) {
+            // 配置导致的构造失败不是网站不健康；用契约不匹配表达，避免触发重启。
+            return HealthResult.unhealthyContract();
+        }
 
         try {
             HttpResponse<String> response =
@@ -109,10 +125,19 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
         }
     }
 
-    /** 关闭内部 {@link HttpClient}，不再接受新的校验或探活请求。 */
+    /** 标记为已关闭。旧代际可能仍被在途请求引用，因此不阻塞关闭流程。 */
+    private volatile boolean closed;
+
+    /**
+     * 标记客户端关闭，使后续请求立即返回“契约不匹配”而不是伪装成网站不可达。
+     *
+     * <p>这里不调用 {@link HttpClient#close()}：它会阻塞等待在途请求完成，
+     * 而 reload 发生在代理调度线程上，阻塞会拖慢其它调度任务。底层连接池
+     * 随客户端的代际被 GC 回收。</p>
+     */
     @Override
     public void close() {
-        httpClient.close();
+        closed = true;
     }
 
     static VerifyResult mapVerifyResponse(int statusCode, String body) {
@@ -264,13 +289,6 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
 
     private static String normalizePath(String path) {
         String trimmed = Objects.requireNonNull(path, "path").trim();
-        if (trimmed.isEmpty()) {
-            return PluginConfig.DEFAULT_HEALTH_PATH;
-        }
         return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
-    }
-
-    private static int positiveOrDefault(int value, int fallback) {
-        return value > 0 ? value : fallback;
     }
 }

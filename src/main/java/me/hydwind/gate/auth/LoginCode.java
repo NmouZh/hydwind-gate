@@ -3,11 +3,12 @@ package me.hydwind.gate.auth;
 import java.text.Normalizer;
 
 /**
- * 网站签发的一次性码在插件侧的归一化与长度校验。
+ * 网站签发的一次性码在插件侧的归一化。
  *
  * <p>同时处理 GLOSSARY 中的两种码：由两个颜文字拼接的<b>登录码（login code）</b>，
  * 以及无法粘贴颜文字时手动输入的纯 ASCII <b>备用码（fallback code）</b>。
- * 两者都做 NFC 归一化、去掉首尾空白，并折叠 ASCII 字母大小写；颜文字本身不受影响。</p>
+ * 两者都做 NFC 归一化、去掉首尾空白，并折叠 ASCII 字母大小写；颜文字本身不受影响。
+ * 空值与长度校验由 {@code LoginCommand} 在解析阶段完成。</p>
  */
 public final class LoginCode {
 
@@ -29,11 +30,5 @@ public final class LoginCode {
             result.append(character >= 'a' && character <= 'z' ? (char) (character - ('a' - 'A')) : character);
         }
         return result.toString();
-    }
-
-    /** 在发给网站之前拒绝缺失、空白或超长的码。 */
-    public static boolean isBlankOrTooLong(String code) {
-        String normalized = normalize(code);
-        return normalized == null || normalized.isBlank() || normalized.codePointCount(0, normalized.length()) > MAX_LENGTH;
     }
 }

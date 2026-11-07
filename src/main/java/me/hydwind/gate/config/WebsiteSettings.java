@@ -1,5 +1,6 @@
 package me.hydwind.gate.config;
 
+import java.net.URI;
 import java.util.Objects;
 
 /**
@@ -27,6 +28,20 @@ public record WebsiteSettings(
         Objects.requireNonNull(healthPath, "healthPath");
         if (baseUrl.isBlank()) {
             throw new IllegalArgumentException("website.base-url must not be blank");
+        }
+        // 语法错误必须在加载时失败：否则每次请求都会构造失败并被归类为契约不匹配，
+        // 让一个配置笔误看起来像网站故障。URI.create 只做语法校验，不发请求。
+        URI baseUri;
+        try {
+            baseUri = URI.create(baseUrl);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(
+                    "website.base-url is not a valid URI: " + baseUrl, exception);
+        }
+        String scheme = baseUri.getScheme();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            throw new IllegalArgumentException(
+                    "website.base-url must use http or https: " + baseUrl);
         }
         if (connectTimeoutMillis <= 0) {
             throw new IllegalArgumentException("website.connect-timeout-millis must be positive");
