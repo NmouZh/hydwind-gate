@@ -58,7 +58,7 @@ CI 使用 Java 25（temurin）与 Gradle 9.7.0，执行 `gradle build`（包含 
 # 查看最近一次成功运行
 gh run list -R NmouZh/hydwind-gate --branch feat/velocity-gate --status success
 
-# 下载 artifact 到当前目录（解压后得到 HydwindGate-0.1.0.jar）
+# 下载 artifact 到当前目录（解压后得到 HydwindGate-0.2.0.jar）
 gh run download <run-id> -R NmouZh/hydwind-gate -n hydwind-gate
 ```
 
@@ -85,7 +85,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 `plugins/` 最终应同时包含：
 
-- `HydwindGate-0.1.0.jar`（本插件，来自 CI artifact）
+- `HydwindGate-0.2.0.jar`（本插件，来自 CI artifact）
 - `limboapi-1.2.0.jar`（LimboAPI）
 
 插件声明了 `@Dependency(id = "limboapi")`；缺少 LimboAPI 时 Velocity 会拒绝加载本插件并给出原因，此时代理仍在运行但没有门禁，必须安装 LimboAPI 后重启并确认控制台出现 `HydwindGate ... enabled`。LimboAPI 本体是 AGPLv3，API 模块是 MIT，再分发时注意区别。
@@ -93,7 +93,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 ## 部署
 
 1. 安装 Java 25 与 Velocity 4.1.2+，在 `velocity.toml` 的 `servers` 中配置后端（例如键名 `main`），并让插件配置 `server.main` 的值与这个键一致（默认 `main`）。`server.main` 是插件配置路径，不是 `velocity.toml` 里的服务器名。
-2. 把 `HydwindGate-0.1.0.jar` 与 `limboapi-1.2.0.jar` 放进 Velocity 的 `plugins/`（见上一节的下载方式）。
+2. 把 `HydwindGate-0.2.0.jar` 与 `limboapi-1.2.0.jar` 放进 Velocity 的 `plugins/`（见上一节的下载方式）。
 3. 启动代理，插件会在 `plugins/hydwind-gate/config.yml` 生成默认配置。
 4. 设置环境变量 `HYDWIND_PLUGIN_TOKEN`，其值必须与网站侧 `PLUGIN_TOKEN` 一致；非空时优先于 `website.token`。
 5. 重启代理，把 `velocity.toml` 中的 `forced-hosts` / 玩家入口指向该代理；插件会通过 `PreLoginEvent` 强制离线模式。
@@ -159,6 +159,11 @@ messages:
 - [ ] 配置 systemd `hydwind-restart.path` + `.service`，监听重启请求文件。
 - [ ] 确认 `server.main` 与 `velocity.toml` 中的服务器名一致。
 - [ ] 管理员组拥有 `hydwind.admin`。
+
+## 回滚
+
+发布后如需回退，见 [docs/rollback.md](docs/rollback.md)：保留上一版 jar、沿用配置（旧版对新校验更宽松）、
+同步回退 LimboAPI/Velocity，并预期所有玩家重新登录。
 
 ## 受控重启
 

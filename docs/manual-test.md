@@ -34,7 +34,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
   | sha256sum -c -
 
 # plugins/ 中应同时存在：
-#   HydwindGate-0.1.0.jar
+#   HydwindGate-0.2.0.jar
 #   limboapi-1.2.0.jar
 ```
 
