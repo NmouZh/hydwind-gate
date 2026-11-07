@@ -169,6 +169,34 @@ public final class LoginSessionStore {
         return Optional.ofNullable(sessions.get(uuid));
     }
 
+    /** 按游戏 ID（大小写不敏感）查找会话，供管理员命令使用。 */
+    public synchronized Optional<LoginSession> findByGameId(String gameId) {
+        Objects.requireNonNull(gameId, "gameId");
+        return sessions.values().stream()
+                .filter(session -> session.gameId().equalsIgnoreCase(gameId))
+                .findFirst();
+    }
+
+    /** 管理员手动放行：任意存在且未认证的会话直接置为 AUTHENTICATED。 */
+    public synchronized boolean forceAuthenticate(UUID uuid, Instant now) {
+        LoginSession session = sessions.get(uuid);
+        if (session == null || session.isAuthenticated()) {
+            return false;
+        }
+        sessions.put(uuid, session.transitionTo(LoginSession.Status.AUTHENTICATED, now));
+        return true;
+    }
+
+    /** 管理员踢出：移除会话（含宽限记录）。 */
+    public synchronized boolean remove(UUID uuid) {
+        return sessions.remove(uuid) != null;
+    }
+
+    /** 会话快照，供状态统计使用。 */
+    public synchronized List<LoginSession> snapshot() {
+        return List.copyOf(sessions.values());
+    }
+
     private LoginSession update(LoginSession session) {
         sessions.put(session.uuid(), session);
         return session;

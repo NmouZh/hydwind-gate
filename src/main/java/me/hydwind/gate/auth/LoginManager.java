@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.ui.PlayerGateway;
 import me.hydwind.gate.web.VerifyResult;
@@ -27,6 +28,7 @@ public final class LoginManager {
     private final Duration loginTimeout;
     private final Clock clock;
     private final Executor asyncExecutor;
+    private final Consumer<UUID> unreachableCallback;
 
     public LoginManager(WebsiteClient websiteClient,
                         LoginSessionStore sessionStore,
@@ -35,6 +37,18 @@ public final class LoginManager {
                         Duration loginTimeout,
                         Clock clock,
                         Executor asyncExecutor) {
+        this(websiteClient, sessionStore, playerGateway, messages, loginTimeout, clock, asyncExecutor,
+                uuid -> { });
+    }
+
+    public LoginManager(WebsiteClient websiteClient,
+                        LoginSessionStore sessionStore,
+                        PlayerGateway playerGateway,
+                        Messages messages,
+                        Duration loginTimeout,
+                        Clock clock,
+                        Executor asyncExecutor,
+                        Consumer<UUID> unreachableCallback) {
         this.websiteClient = Objects.requireNonNull(websiteClient, "websiteClient");
         this.sessionStore = Objects.requireNonNull(sessionStore, "sessionStore");
         this.playerGateway = Objects.requireNonNull(playerGateway, "playerGateway");
@@ -42,6 +56,7 @@ public final class LoginManager {
         this.loginTimeout = Objects.requireNonNull(loginTimeout, "loginTimeout");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.asyncExecutor = Objects.requireNonNull(asyncExecutor, "asyncExecutor");
+        this.unreachableCallback = Objects.requireNonNull(unreachableCallback, "unreachableCallback");
     }
 
     /**
@@ -149,8 +164,22 @@ public final class LoginManager {
             case EXPIRED -> reject(uuid, messages.expiredCode());
             case USED -> reject(uuid, messages.usedCode());
             case GAME_ID_MISMATCH -> reject(uuid, messages.gameIdMismatch());
-            case UNREACHABLE -> reject(uuid, messages.serviceUnavailable());
+            case UNREACHABLE -> {
+                notifyUnreachable(uuid);
+                reject(uuid, messages.serviceUnavailable());
+            }
             case UNAUTHORIZED -> reject(uuid, messages.serviceMisconfigured());
+        }
+    }
+
+    /**
+     * 通知外部「网站不可达」。回调异常必须吞掉，登录流程仍按 fail-closed 处理。
+     */
+    private void notifyUnreachable(UUID uuid) {
+        try {
+            unreachableCallback.accept(uuid);
+        } catch (RuntimeException ignored) {
+            // 重启触发、日志写入等旁路失败不影响玩家登录。
         }
     }
 

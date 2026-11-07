@@ -236,6 +236,37 @@ class LoginManagerTest {
         assertEquals(List.of(PLAYER), gateway.unfrozen);
     }
 
+    @Test
+    void unreachableWebsiteTriggersUnreachableCallbackOnce() {
+        List<UUID> unreachable = new ArrayList<>();
+        LoginManager withCallback = new LoginManager(website, store, gateway, messages,
+                LOGIN_TIMEOUT, clock, Runnable::run, unreachable::add);
+        withCallback.handleJoin(PLAYER, GAME_ID, IP);
+        website.next = VerifyResult.unreachable();
+
+        withCallback.submitCode(PLAYER, "code");
+
+        assertEquals(List.of(PLAYER), unreachable);
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+    }
+
+    @Test
+    void callbackFailureDoesNotBreakFailClosedLoginFlow() {
+        LoginManager withCallback = new LoginManager(website, store, gateway, messages,
+                LOGIN_TIMEOUT, clock, Runnable::run, uuid -> {
+                    throw new IllegalStateException("callback boom");
+                });
+        withCallback.handleJoin(PLAYER, GAME_ID, IP);
+        gateway.dialogsShown.clear();
+        website.next = VerifyResult.unreachable();
+
+        withCallback.submitCode(PLAYER, "code");
+
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+        assertEquals(List.of(messages.serviceUnavailable()), gateway.messages);
+        assertEquals(List.of(PLAYER), gateway.dialogsShown);
+    }
+
     private static final class FakeWebsiteClient implements WebsiteClient {
 
         private VerifyResult next = VerifyResult.unreachable();
