@@ -1,6 +1,13 @@
 package me.hydwind.gate.ui;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import me.hydwind.gate.config.YamlMaps;
 
 /**
@@ -62,6 +69,9 @@ public record Messages(
     private static final String DEFAULT_ALREADY_AUTHENTICATED = "你已经完成认证，可以直接游戏。";
     private static final String DEFAULT_STATUS_UNVERIFIED = "当前状态：尚未认证。";
 
+    /** 默认文案里的占位符形如 {@code {name}}。 */
+    private static final Pattern PLACEHOLDER = Pattern.compile("\\{([^{}]+)}");
+
     /** 默认文案，供测试与未加载配置的场景使用。 */
     public static Messages defaults() {
         return new Messages(
@@ -122,5 +132,117 @@ public record Messages(
                 YamlMaps.rawString(section, "status-unverified", defaults.statusUnverified()),
                 AdminMessages.from(section)
         );
+    }
+
+    /**
+     * 检查 {@code config.yml} 中已自定义的文案是否漏掉了默认文案里的占位符。
+     *
+     * <p>只做提示，不改变 {@link #from(Map)} 的运行时替换行为：漏掉的占位符在游戏里
+     * 会原样显示，管理员可据此排查。配置里没有的键（仍使用默认值）不算问题；
+     * 自定义文案里多出来的未知占位符也不报错。</p>
+     *
+     * @param root {@code config.yml} 解析后的根 map
+     * @return 配置键 → 缺失占位符列表（如 {@code messages.gate-prompt → "{url}"}）；
+     *         没有问题时为空 map
+     */
+    public static Map<String, String> placeholderWarnings(Map<String, Object> root) {
+        Objects.requireNonNull(root, "root");
+        Map<String, Object> section = YamlMaps.section(root, "messages");
+        Map<String, Object> adminSection = YamlMaps.section(section, "admin");
+
+        Map<String, String> warnings = new LinkedHashMap<>();
+        collectWarnings("messages.", playerDefaultsByKey(), section, warnings);
+        collectWarnings("messages.admin.", adminDefaultsByKey(), adminSection, warnings);
+        return Collections.unmodifiableMap(warnings);
+    }
+
+    /** 对比一段配置里已出现的字符串，把缺失的默认占位符记进 {@code warnings}。 */
+    private static void collectWarnings(String keyPrefix,
+                                        Map<String, String> defaults,
+                                        Map<String, Object> section,
+                                        Map<String, String> warnings) {
+        defaults.forEach((key, defaultValue) -> {
+            Object configured = section.get(key);
+            if (!(configured instanceof String customValue)) {
+                return;
+            }
+            Set<String> missing = missingPlaceholders(defaultValue, customValue);
+            if (!missing.isEmpty()) {
+                warnings.put(keyPrefix + key, String.join(", ", missing));
+            }
+        });
+    }
+
+    /** 默认值里存在、自定义值里已不存在的占位符；保留出现顺序。 */
+    private static Set<String> missingPlaceholders(String defaultValue, String customValue) {
+        Set<String> missing = new LinkedHashSet<>();
+        Matcher matcher = PLACEHOLDER.matcher(defaultValue);
+        while (matcher.find()) {
+            String placeholder = "{" + matcher.group(1) + "}";
+            if (!customValue.contains(placeholder)) {
+                missing.add(placeholder);
+            }
+        }
+        return missing;
+    }
+
+    /** 玩家文案的配置键 → 默认值，供 {@link #placeholderWarnings(Map)} 对比。 */
+    private static Map<String, String> playerDefaultsByKey() {
+        Messages defaults = defaults();
+        Map<String, String> entries = new LinkedHashMap<>();
+        entries.put("gate-title", defaults.gateTitle());
+        entries.put("gate-prompt", defaults.gatePrompt());
+        entries.put("login-success", defaults.loginSuccess());
+        entries.put("login-success-admin", defaults.loginSuccessAdmin());
+        entries.put("service-unavailable", defaults.serviceUnavailable());
+        entries.put("service-misconfigured", defaults.serviceMisconfigured());
+        entries.put("forbidden", defaults.forbidden());
+        entries.put("not-found", defaults.notFound());
+        entries.put("session-timeout", defaults.sessionTimeout());
+        entries.put("invalid-code", defaults.invalidCode());
+        entries.put("expired-code", defaults.expiredCode());
+        entries.put("used-code", defaults.usedCode());
+        entries.put("game-id-mismatch", defaults.gameIdMismatch());
+        entries.put("game-id-mismatch-expected", defaults.gameIdMismatchExpected());
+        entries.put("code-too-long", defaults.codeTooLong());
+        entries.put("rate-limited", defaults.rateLimited());
+        entries.put("rate-limited-no-retry", defaults.rateLimitedNoRetry());
+        entries.put("rate-limited-with-attempts", defaults.rateLimitedWithAttempts());
+        entries.put("rate-limited-no-retry-with-attempts", defaults.rateLimitedNoRetryWithAttempts());
+        entries.put("empty-code", defaults.emptyCode());
+        entries.put("verifying", defaults.verifying());
+        entries.put("already-authenticated", defaults.alreadyAuthenticated());
+        entries.put("status-unverified", defaults.statusUnverified());
+        return entries;
+    }
+
+    /** 管理员文案的配置键 → 默认值（相对 {@code messages.admin} 段）。 */
+    private static Map<String, String> adminDefaultsByKey() {
+        AdminMessages defaults = defaults().admin();
+        Map<String, String> entries = new LinkedHashMap<>();
+        entries.put("no-permission", defaults.noPermission());
+        entries.put("usage", defaults.usage());
+        entries.put("unknown-subcommand", defaults.unknownSubcommand());
+        entries.put("reloaded", defaults.reloaded());
+        entries.put("reload-failed", defaults.reloadFailed());
+        entries.put("approve-usage", defaults.approveUsage());
+        entries.put("kick-usage", defaults.kickUsage());
+        entries.put("session-not-found", defaults.sessionNotFound());
+        entries.put("already-authenticated", defaults.alreadyAuthenticated());
+        entries.put("approved-player", defaults.approvedPlayer());
+        entries.put("approved", defaults.approved());
+        entries.put("kicked-player", defaults.kickedPlayer());
+        entries.put("kicked", defaults.kicked());
+        entries.put("status-limbo", defaults.statusLimbo());
+        entries.put("status-limbo-names", defaults.statusLimboNames());
+        entries.put("status-pending", defaults.statusPending());
+        entries.put("status-authenticated", defaults.statusAuthenticated());
+        entries.put("status-authenticated-grace", defaults.statusAuthenticatedGrace());
+        entries.put("status-health-healthy", defaults.statusHealthHealthy());
+        entries.put("status-health-unhealthy", defaults.statusHealthUnhealthy());
+        entries.put("status-restart-quota", defaults.statusRestartQuota());
+        entries.put("status-next-allowed", defaults.statusNextAllowed());
+        entries.put("status-permission", defaults.statusPermission());
+        return entries;
     }
 }

@@ -38,18 +38,31 @@ public final class RestartTrigger {
         this.logger = Objects.requireNonNull(logger, "logger");
     }
 
-    /** 收到 UNREACHABLE 时调用：探活失败且策略允许时写入重启请求文件。 */
+    /**
+     * 收到 UNREACHABLE 时调用：只有探活确认是传输层失败且策略允许时才写重启请求文件。
+     *
+     * <p>网站有响应但契约不匹配（{@link HealthResult#unhealthyContract()}）时只记录
+     * WARN：重启网站无法修复接口不兼容，避免无意义的重启风暴。</p>
+     */
     public void onUnreachable() {
         HealthResult health;
         try {
             health = websiteClient.health();
         } catch (RuntimeException exception) {
-            logger.warn("网站健康检查异常，按不可用处理: {}", exception.toString());
+            logger.warn("网站健康检查异常，按传输层失败处理: {}", exception.toString());
             health = HealthResult.unhealthy();
         }
 
-        if (health == null || health.healthy()) {
+        if (health == null) {
+            logger.warn("网站健康检查返回 null，跳过重启。");
+            return;
+        }
+        if (health.healthy()) {
             logger.info("收到登录校验不可达，但网站健康检查通过，跳过重启。");
+            return;
+        }
+        if (!health.transportFailure()) {
+            logger.warn("网站健康检查失败但属于契约不匹配（网站有响应），跳过重启。");
             return;
         }
 

@@ -66,6 +66,16 @@ class RestartTriggerTest {
     }
 
     @Test
+    void contractMismatchDoesNotWriteRestartRequest() {
+        website.contractMismatch = true;
+        RestartTrigger trigger = trigger(settings(requestFile));
+
+        trigger.onUnreachable();
+
+        assertFalse(Files.exists(requestFile), "网站有响应但契约不匹配时不应触发重启");
+    }
+
+    @Test
     void secondTriggerWithinCooldownIsRejected() throws IOException {
         RestartTrigger trigger = trigger(settings(requestFile));
         trigger.onUnreachable();
@@ -129,6 +139,7 @@ class RestartTriggerTest {
     private static final class FakeWebsiteClient implements WebsiteClient {
 
         private boolean healthy;
+        private boolean contractMismatch;
         private RuntimeException failWith;
 
         @Override
@@ -140,6 +151,9 @@ class RestartTriggerTest {
         public HealthResult health() {
             if (failWith != null) {
                 throw failWith;
+            }
+            if (contractMismatch) {
+                return HealthResult.unhealthyContract();
             }
             return healthy ? HealthResult.healthy(42) : HealthResult.unhealthy();
         }

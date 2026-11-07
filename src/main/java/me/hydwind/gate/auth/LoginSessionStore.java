@@ -8,10 +8,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
  * 内存中的登录会话状态机。所有时间都由调用方注入，不在内部读取系统时钟。
+ *
+ * <p>每个会话在进服时固定自己的 {@code loginDeadline}；之后的超时判断只看这个截止时刻，
+ * 因此热重载改变 {@code auth.login-timeout-seconds} 不会影响已经进服的玩家。
  *
  * <p>宽限记录只保存在内存里，插件重启后自然清空，玩家需要重新登录。
  */
@@ -34,13 +38,17 @@ public final class LoginSessionStore {
 
     /**
      * 玩家进服。已认证且在宽限内的同 UUID + 同 IP 重连直接恢复认证；
-     * 其余情况一律创建新的 {@link LoginSession.Status#PENDING} 会话。
+     * 其余情况创建新的 {@link LoginSession.Status#PENDING} 会话。
+     *
+     * <p>新会话的 {@code loginDeadline} 固定为 {@code now + loginTimeout}；
+     * 宽限恢复的会话和重复的在线进服事件都保留原 deadline，不因再次进服而延长登录窗口。
      */
-    public synchronized LoginSession join(UUID uuid, String gameId, String ip, Instant now) {
+    public synchronized LoginSession join(UUID uuid, String gameId, String ip, Instant now, Duration loginTimeout) {
         Objects.requireNonNull(uuid, "uuid");
         Objects.requireNonNull(gameId, "gameId");
         Objects.requireNonNull(ip, "ip");
         Objects.requireNonNull(now, "now");
+        Objects.requireNonNull(loginTimeout, "loginTimeout");
 
         LoginSession existing = sessions.get(uuid);
         if (existing != null && existing.isAuthenticated()) {
@@ -49,37 +57,55 @@ public final class LoginSessionStore {
                 return update(existing.reconnectedAt(now));
             }
             if (withinGrace(existing, gameId, ip, now)) {
+                // 宽限恢复：沿用原 loginDeadline 与 verificationId。
                 return update(existing.reconnectedAt(now));
             }
+        } else if (existing != null && existing.disconnectedAt() == null
+                && awaitingAuthentication(existing) && existing.matches(gameId, ip)) {
+            // 未认证会话的重复进服事件：保持状态与截止时刻，避免靠重复进服延长登录窗口。
+            return update(existing.reconnectedAt(now));
         }
 
-        return update(LoginSession.pending(uuid, gameId, ip, now));
+        return update(LoginSession.pending(uuid, gameId, ip, now, now.plus(loginTimeout)));
     }
 
-    /** 提交登录码，PENDING 进入 VERIFYING。其他状态返回 {@code false}，不做任何改变。 */
-    public synchronized boolean beginVerification(UUID uuid, Instant now) {
+    /**
+     * 提交登录码，PENDING 进入 VERIFYING 并分配新的校验编号。
+     *
+     * @return 本次校验编号；非 PENDING 状态返回 {@link OptionalLong#empty()}
+     */
+    public synchronized OptionalLong beginVerification(UUID uuid, Instant now) {
         LoginSession session = sessions.get(uuid);
         if (session == null || session.status() != LoginSession.Status.PENDING) {
-            return false;
+            return OptionalLong.empty();
         }
-        sessions.put(uuid, session.transitionTo(LoginSession.Status.VERIFYING, now));
-        return true;
+        long verificationId = session.verificationId() + 1;
+        sessions.put(uuid, session.transitionTo(LoginSession.Status.VERIFYING, now, verificationId));
+        return OptionalLong.of(verificationId);
     }
 
-    /** 网站校验成功，VERIFYING 进入 AUTHENTICATED。非 VERIFYING（含迟到的结果）返回 {@code false}。 */
-    public synchronized boolean authenticationSucceeded(UUID uuid, Instant now) {
+    /**
+     * 网站校验成功，VERIFYING 进入 AUTHENTICATED。
+     * 只有校验编号匹配的结果才生效；迟到的旧结果、非 VERIFYING 状态一律拒绝。
+     */
+    public synchronized boolean authenticationSucceeded(UUID uuid, long verificationId, Instant now) {
         LoginSession session = sessions.get(uuid);
-        if (session == null || session.status() != LoginSession.Status.VERIFYING) {
+        if (session == null || session.status() != LoginSession.Status.VERIFYING
+                || session.verificationId() != verificationId) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.AUTHENTICATED, now));
         return true;
     }
 
-    /** 网站拒绝登录码，VERIFYING 退回 PENDING，允许玩家重新提交。 */
-    public synchronized boolean authenticationFailed(UUID uuid, Instant now) {
+    /**
+     * 网站拒绝登录码，VERIFYING 退回 PENDING，允许玩家重新提交。
+     * 只有校验编号匹配的结果才生效，迟到结果不会打断新的校验。
+     */
+    public synchronized boolean authenticationFailed(UUID uuid, long verificationId, Instant now) {
         LoginSession session = sessions.get(uuid);
-        if (session == null || session.status() != LoginSession.Status.VERIFYING) {
+        if (session == null || session.status() != LoginSession.Status.VERIFYING
+                || session.verificationId() != verificationId) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.PENDING, now));
@@ -87,16 +113,14 @@ public final class LoginSessionStore {
     }
 
     /**
-     * 从进服时刻起超过 {@code limit} 仍未认证则标记为 TIMED_OUT。
+     * 到达会话自己的 {@code loginDeadline} 仍未认证则标记为 TIMED_OUT。
      *
      * @return 本次调用是否完成了超时迁移
      */
-    public synchronized boolean timeOut(UUID uuid, Instant now, Duration limit) {
+    public synchronized boolean timeOut(UUID uuid, Instant now) {
+        Objects.requireNonNull(now, "now");
         LoginSession session = sessions.get(uuid);
-        if (session == null) {
-            return false;
-        }
-        if (!awaitingAuthentication(session) || !hasExceededTimeout(session, now, limit)) {
+        if (session == null || !awaitingAuthentication(session) || now.isBefore(session.loginDeadline())) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.TIMED_OUT, now));
@@ -119,16 +143,16 @@ public final class LoginSessionStore {
     }
 
     /**
-     * 批量处理超时：PENDING / VERIFYING 从进服起超过 {@code limit} 的会话标记为 TIMED_OUT。
+     * 批量处理超时：PENDING / VERIFYING 到达各自 {@code loginDeadline} 的会话标记为 TIMED_OUT。
+     * 供 60 秒兜底 sweep 使用，不影响已认证会话。
      *
      * @return 本次被标记为超时的会话
      */
-    public synchronized List<LoginSession> timeOutAll(Instant now, Duration limit) {
+    public synchronized List<LoginSession> timeOutAll(Instant now) {
         Objects.requireNonNull(now, "now");
-        Objects.requireNonNull(limit, "limit");
         List<LoginSession> timedOut = new ArrayList<>();
         for (LoginSession session : List.copyOf(sessions.values())) {
-            if (!awaitingAuthentication(session) || !hasExceededTimeout(session, now, limit)) {
+            if (!awaitingAuthentication(session) || now.isBefore(session.loginDeadline())) {
                 continue;
             }
             LoginSession updated = session.transitionTo(LoginSession.Status.TIMED_OUT, now);
@@ -198,10 +222,6 @@ public final class LoginSessionStore {
     private static boolean awaitingAuthentication(LoginSession session) {
         return session.status() == LoginSession.Status.PENDING
                 || session.status() == LoginSession.Status.VERIFYING;
-    }
-
-    private static boolean hasExceededTimeout(LoginSession session, Instant now, Duration limit) {
-        return Duration.between(session.enteredAt(), now).compareTo(limit) >= 0;
     }
 
     private boolean withinGrace(LoginSession session, String gameId, String ip, Instant now) {

@@ -38,6 +38,8 @@ public record LoginFeedback(boolean authenticated, boolean triggerRestart, Strin
                             : Templates.fill(messages.gameIdMismatchExpected(),
                                     "expectedGameId", result.expectedGameId()));
             case RATE_LIMITED -> new LoginFeedback(false, false, rateLimitMessage(result, messages));
+            // 网站答了但契约不符：按配置异常提示，重启网站无意义。
+            case CONTRACT_MISMATCH -> new LoginFeedback(false, false, messages.serviceMisconfigured());
             case UNREACHABLE -> new LoginFeedback(false, true, messages.serviceUnavailable());
         };
     }

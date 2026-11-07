@@ -1,6 +1,8 @@
-# HydwindGate 手工验证清单（V4 · Velocity + LimboAPI）
+# HydwindGate 手工验证清单（Velocity + LimboAPI）
 
-> 自动化测试只覆盖纯逻辑与 HTTP 契约（命令解析、文案映射、会话状态/宽限、配置解析、重启策略、`WebsiteClient` 对本地 HTTP 桩）。limbo 内的真实客户端交互、转服与网络故障必须按本清单手工验证，**不在 CI 中运行**。
+> 自动化测试覆盖纯逻辑与编排层：`LoginFlowTest`（submit / verify / timeout、迟到结果、重复提交、管理员放行后的 onSpawn 决策）、`AdminActionServiceTest`（approve / kick 分支与顺序）、`CommandGrammarTest`（解析 / 补全 / requiresTarget）、`RuntimeHolderTest`（代际发布与关闭）、`LoginSessionStoreTest`（deadline 固定、verificationId 归属、reload 后旧会话不变）、`HttpWebsiteClientTest`（HTTP 桩与 `CONTRACT_MISMATCH` 分类）、`RestartTriggerTest`（契约不兼容不重启）、`PluginConfigTest`（窄视图与集中校验）等。
+>
+> 这些已覆盖的编排与纯逻辑分支不再在本清单重复；本清单只验证真实 limbo 客户端交互、真实网络/进程行为与启动保护。
 >
 > 建议每次发布前完整走一遍，并在 `docs/daily/` 记录结果。
 
@@ -12,7 +14,8 @@
 - [ ] Velocity 4.1.2+（推荐最新 4.1.x）。
 - [ ] 用低于 4.1.2 的 Velocity 启动：控制台记录明确错误并关闭代理，不会静默继续。
 - [ ] 删除 `limboapi-1.2.0.jar` 后启动：记录「LimboAPI is not loaded」并关闭代理（或由插件依赖直接拒绝加载）。
-- [ ] LimboAPI 1.2.0，与 Velocity 版本配套。
+- [ ] 安装低于 1.2.0 的 LimboAPI（如 1.1.27）后启动：HydwindGate 读取实际版本，记录版本过低错误并关闭代理，不会进入 limbo 或静默继续。
+- [ ] LimboAPI 最低 1.2.0，与 Velocity 版本配套。
 - [ ] 客户端与后端均为 Minecraft 26.3（协议 777）。
 - [ ] 后端 Paper 26.3 服务器已在 `velocity.toml` 的 `servers` 中，且名称与 `server.main` 一致。
 
@@ -69,6 +72,8 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 ## 4. 错误码
 
+> 错误码到文案的映射已由 `LoginFeedbackTest` / `HttpWebsiteClientTest` 覆盖；本节只验证真实 limbo 中玩家看到的文案，以及这些失败不触发重启。
+
 逐项确认玩家仍在 limbo，且文案准确：
 
 - [ ] `invalid_code`：随机错误码 → 「登录码不存在」；文案同时提示「如果没有账号，请到 QQ 群私聊机器人注册 游戏ID」。
@@ -82,6 +87,8 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 ## 5. 429 限流
 
+> 429 文案与重试秒数映射已由 `LoginFeedbackTest` 覆盖；本节只验证真实限流响应与「不写重启文件」。
+
 - [ ] 快速连续提交错误码，直到网站返回 429。
 - [ ] 玩家看到「尝试过多，请 X 秒后再试」；X 来自 `retryAfterMs` 或 `Retry-After`。
 - [ ] 响应带 `attemptsRemaining` 时文案追加「剩余 N 次」。
@@ -89,6 +96,8 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - [ ] 限流**不**触发受控重启（`restart.request-path` 不应出现）。
 
 ## 6. 超时踢出
+
+> 超时状态机与迟到结果已由 `LoginFlowTest` / `LoginSessionStoreTest` 覆盖；本节只验证真实客户端被踢的时机与断开原因。
 
 - [ ] 未登录玩家在 limbo 挂机超过 `auth.login-timeout-seconds`（默认 300 秒）。
 - [ ] 玩家被踢出，断开原因包含「登录超时」。
@@ -119,7 +128,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 ## 10. 受控重启文件与冷却
 
-- [ ] 停止网站，limbo 中提交有效码；健康检查也失败且策略允许时，`restart.request-path` 出现。
+- [ ] 停止网站，limbo 中提交有效码；健康检查确认传输层失败且策略允许时，`restart.request-path` 出现。
 - [ ] 文件内容包含：
   - `reason=website-unreachable`
   - `requested-at=<ISO-8601 时间>`
@@ -128,8 +137,12 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - [ ] 滚动窗口内（默认 3600 秒）第 3 次触发被拒绝；窗口滑出后额度恢复。
 - [ ] `/hydwind status` 的重启额度与下次允许时间与上述行为一致。
 - [ ] `restart.request-path` 指向不可写目录时：只记录 `WARN`，登录流程不受影响。
+- [ ] 网站保持可达，把 `/api/plugin/login/verify` 响应改成契约不兼容（200 但 `ok=false`、缺 `account`、409 未知 `reason`、或畸形 JSON）：玩家看到「认证服务配置异常」，控制台告警，`restart.request-path` 不出现，不触发受控重启。
+- [ ] `/api/health` 返回 200 但 `ok` 不为 true 或畸形 JSON：健康检查判为「有响应但契约不兼容」，只记录告警，不写重启文件。
 
 ## 11. `/hydwind` 管理命令
+
+> 子命令解析、补全与 `requiresTarget` 已由 `CommandGrammarTest` 覆盖，approve / kick 的分支与顺序已由 `AdminActionServiceTest` 覆盖；本节只验证两个入口的真实行为与玩家可见文案。
 
 用一个拥有 `hydwind.admin` 权限的管理员账号，分别在主服与 limbo 中执行（limbo 内命令由 `onChat` 解析，不经过 `CommandManager`）：
 
@@ -143,6 +156,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - [ ] `/hydwind reload`：修改 `messages.gate-title` 或 `auth.session-grace-seconds` 后执行，日志出现重载成功；进行中的 limbo 玩家不被打断，`/hydwind status` 的重启额度不被清零，断线宽限立即按新值生效。
 - [ ] `/hydwind approve <玩家>`：
   - [ ] 对 limbo 中未认证玩家执行：玩家收到「管理员已手动放行你的登录」，随后转到 `server.main`。
+  - [ ] 在玩家 `onSpawn` 之前放行（可循环「进服 + 立即 approve」制造 fuzz 时序）：玩家不会卡在 limbo；`onSpawn` 后立即转服，且不再收到 limbo 提示。
   - [ ] 重复执行：提示「玩家已经通过认证」。
   - [ ] 对不存在的玩家执行：提示「没有找到玩家 ... 的登录会话」。
 - [ ] `/hydwind kick <玩家>`：
@@ -155,9 +169,12 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 ## 12. 配置消费
 
+> 配置解析、窄视图与集中校验已由 `PluginConfigTest` 覆盖；deadline 固定与 reload 后旧会话不变由 `LoginSessionStoreTest` 覆盖。本节只验证真实启动/重载行为。
+
 - [ ] 修改 `auth.session-grace-seconds` 并重载：新值立即用于断线重连；在线/已断线的会话都不会丢失。
 - [ ] 修改 `auth.prompt-interval-seconds` 并重载：**仅对之后进入 limbo 的会话生效**；已在 limbo 的玩家保持原提示间隔。
-- [ ] 修改 `auth.login-timeout-seconds` 并重载：**仅对之后进入 limbo 的会话生效**；已在 limbo 的玩家保持原超时定时器。
+- [ ] 把 `auth.login-timeout-seconds` 从 300 调大到 600 并重载：已在 limbo 的玩家仍在原定 300 秒左右被踢；重载后新进 limbo 的玩家按 600 秒。反向调小同样只影响新会话；60 秒兜底 sweep 也不会提前踢掉旧会话。
+- [ ] 把 `website.base-url` 改为空、或把 `connect-timeout-millis` / `read-timeout-millis` 改为 0/负数并执行 `/hydwind reload`：重载失败并保留当前配置，玩家不受影响；重启代理则启动失败。
 - [ ] 修改 `limbo.spawn` 后重启代理：新出生点生效；仅重载时日志提示需要重启。
 - [ ] `server.main` 指向不存在的服务器时登录成功：日志报错且玩家被断开，不会卡在 limbo。
 - [ ] 删除/未安装 `limboapi-1.2.0.jar`：Velocity 因插件依赖拒绝加载，或启动检查记录「LimboAPI is not loaded」并关闭代理。

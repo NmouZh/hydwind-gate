@@ -1,0 +1,291 @@
+package me.hydwind.gate.flow;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import me.hydwind.gate.auth.LoginSession;
+import me.hydwind.gate.auth.LoginSessionStore;
+import me.hydwind.gate.ui.Messages;
+import me.hydwind.gate.web.HealthResult;
+import me.hydwind.gate.web.VerifyResult;
+import me.hydwind.gate.web.WebsiteClient;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * 穿过 {@link LoginFlow} 接口的编排测试：真实内存会话仓库 + 假网站客户端 + 可控时钟。
+ */
+class LoginFlowTest {
+
+    private static final UUID PLAYER = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
+    private static final String GAME_ID = "PlayerOne";
+    private static final String IP = "192.0.2.1";
+    private static final Duration LOGIN_TIMEOUT = Duration.ofMinutes(5);
+
+    private final Messages messages = Messages.defaults();
+    private final MutableClock clock = new MutableClock(START);
+    private final StubWebsite website = new StubWebsite();
+
+    private LoginSessionStore store;
+    private LoginFlow flow;
+    private LoginIdentity identity;
+
+    @BeforeEach
+    void setUp() {
+        // 宽限时长与登录超时无关，取一个固定值即可。
+        store = new LoginSessionStore(Duration.ofMinutes(10));
+        flow = new LoginFlow(store, website, messages, clock);
+        identity = new LoginIdentity(PLAYER, GAME_ID, IP);
+        // 进服时由 Adapter 建会话；LoginFlow 自身不负责 join。
+        store.join(PLAYER, GAME_ID, IP, clock.instant(), LOGIN_TIMEOUT);
+    }
+
+    @Test
+    void nonLoginChatIsIgnored() {
+        assertKind(SubmitKind.IGNORED, flow.submit(identity, "hello everyone"));
+        assertKind(SubmitKind.IGNORED, flow.submit(identity, "/register something"));
+    }
+
+    @Test
+    void emptyAndOversizedCodesAreClassifiedBeforeTouchingTheWebsite() {
+        assertKind(SubmitKind.EMPTY_CODE, flow.submit(identity, "/login"));
+        assertKind(SubmitKind.EMPTY_CODE, flow.submit(identity, "/login    "));
+        assertKind(SubmitKind.TOO_LONG, flow.submit(identity, "/login " + "x".repeat(65)));
+
+        assertNull(website.lastCode, "被拒绝的提交不应调用网站");
+        assertEquals(LoginSession.Status.PENDING, session().status());
+    }
+
+    @Test
+    void submitWithoutSessionIsRejectedAndDoesNotCreateOne() {
+        LoginIdentity ghost = new LoginIdentity(
+                UUID.fromString("00000000-0000-0000-0000-000000000099"), "Ghost", IP);
+
+        assertKind(SubmitKind.REJECTED, flow.submit(ghost, "/login some-code"));
+        assertTrue(store.find(ghost.uuid()).isEmpty(), "LoginFlow 不得替 Adapter 创建会话");
+    }
+
+    @Test
+    void successfulSubmitStartsVerificationAndNormalizesTheCode() {
+        SubmitResult result = flow.submit(identity, "/login ShowMe123");
+
+        assertEquals(SubmitKind.VERIFYING, result.kind());
+        assertTrue(result.verificationId() > 0L, "提交成功后必须带有会话内校验编号");
+        assertEquals("SHOWME123", result.normalizedCode(), "ASCII 字母应统一大写");
+        assertEquals(LoginSession.Status.VERIFYING, session().status());
+    }
+
+    @Test
+    void duplicateSubmitWhileVerifyingIsRejected() {
+        SubmitResult first = flow.submit(identity, "/login ShowMe123");
+        SubmitResult second = flow.submit(identity, "/login AnotherCode");
+
+        assertEquals(SubmitKind.REJECTED, second.kind());
+        assertEquals(0L, second.verificationId());
+        assertNull(second.normalizedCode());
+        assertEquals(LoginSession.Status.VERIFYING, session().status(), "重复提交不应改变状态");
+        assertEquals(first.verificationId(), session().verificationId(),
+                "重复提交不应递增校验编号");
+    }
+
+    @Test
+    void successfulVerificationAuthenticatesAndPassesIdentityToTheWebsite() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.result = VerifyResult.ok("PlayerOne", "一号玩家", "player");
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertTrue(outcome.authenticated());
+        assertFalse(outcome.triggerRestart());
+        assertFalse(outcome.contractMismatch());
+        assertTrue(outcome.message().contains("一号玩家"));
+
+        assertEquals("SHOWME123", website.lastCode);
+        assertEquals(GAME_ID, website.lastGameId);
+        assertEquals(PLAYER, website.lastUuid);
+        assertEquals(LoginSession.Status.AUTHENTICATED, session().status());
+    }
+
+    @Test
+    void furtherSubmitsAfterAuthenticationAreReportedAsAlreadyAuthenticated() {
+        authenticate(VerifyResult.ok("PlayerOne", null, "player"));
+
+        assertKind(SubmitKind.ALREADY_AUTHENTICATED, flow.submit(identity, "/login again"));
+    }
+
+    @Test
+    void lateSuccessAfterTimeoutIsDiscarded() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        clock.advance(LOGIN_TIMEOUT.plusSeconds(1));
+        assertTrue(flow.timeout(identity), "超过截止时刻应标记超时");
+        assertEquals(LoginSession.Status.TIMED_OUT, session().status());
+
+        website.result = VerifyResult.ok("PlayerOne", "一号玩家", "player");
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated(), "迟到的成功结果不得放行");
+        assertEquals("", outcome.message(), "迟到结果不再向玩家播报成功文案");
+        assertFalse(outcome.triggerRestart());
+        assertFalse(outcome.contractMismatch());
+        assertEquals(LoginSession.Status.TIMED_OUT, session().status());
+    }
+
+    @Test
+    void timeoutFiresOnlyAfterTheSessionDeadline() {
+        assertFalse(flow.timeout(identity), "截止时刻之前不应超时");
+        assertEquals(LoginSession.Status.PENDING, session().status());
+
+        clock.advance(LOGIN_TIMEOUT.plusSeconds(1));
+        assertTrue(flow.timeout(identity));
+        assertEquals(LoginSession.Status.TIMED_OUT, session().status());
+        assertFalse(flow.timeout(identity), "同一会话不应重复超时");
+    }
+
+    @Test
+    void failedVerificationReturnsItsFeedbackAndAllowsRetry() {
+        SubmitResult submitted = flow.submit(identity, "/login WrongCode");
+        website.result = VerifyResult.invalidCode();
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated());
+        assertFalse(outcome.triggerRestart());
+        assertFalse(outcome.contractMismatch());
+        assertEquals(messages.invalidCode(), outcome.message());
+        assertEquals(LoginSession.Status.PENDING, session().status(), "失败后应允许重新提交");
+
+        SubmitResult retry = flow.submit(identity, "/login AnotherCode");
+        assertEquals(SubmitKind.VERIFYING, retry.kind());
+        assertNotEquals(submitted.verificationId(), retry.verificationId(),
+                "重新提交必须使用新的校验编号");
+    }
+
+    @Test
+    void unreachableWebsiteTriggersRestart() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.result = VerifyResult.unreachable();
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated());
+        assertTrue(outcome.triggerRestart());
+        assertFalse(outcome.contractMismatch());
+        assertEquals(messages.serviceUnavailable(), outcome.message());
+        assertEquals(LoginSession.Status.PENDING, session().status());
+    }
+
+    @Test
+    void websiteExceptionIsTreatedAsUnreachable() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.failure = new IllegalStateException("boom");
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated());
+        assertTrue(outcome.triggerRestart(), "意外异常必须按网站不可达处理");
+        assertFalse(outcome.contractMismatch());
+        assertEquals(messages.serviceUnavailable(), outcome.message());
+    }
+
+    @Test
+    void contractMismatchIsReportedWithoutRestart() {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.result = VerifyResult.contractMismatch();
+
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+
+        assertFalse(outcome.authenticated());
+        assertFalse(outcome.triggerRestart(), "契约不兼容时重启没有意义");
+        assertTrue(outcome.contractMismatch());
+        assertEquals(messages.serviceMisconfigured(), outcome.message());
+        assertEquals(LoginSession.Status.PENDING, session().status(), "失败后应允许重新提交");
+    }
+
+    private void authenticate(VerifyResult result) {
+        SubmitResult submitted = flow.submit(identity, "/login ShowMe123");
+        website.result = result;
+        VerifyOutcome outcome = flow.verify(identity, submitted.verificationId(), submitted.normalizedCode());
+        assertTrue(outcome.authenticated(), "测试前置：必须完成认证");
+    }
+
+    private LoginSession session() {
+        return store.find(PLAYER).orElseThrow();
+    }
+
+    private static void assertKind(SubmitKind expected, SubmitResult result) {
+        assertEquals(expected, result.kind());
+        assertEquals(0L, result.verificationId());
+        assertNull(result.normalizedCode());
+    }
+
+    /** 可控时钟，用于跨过会话截止时刻。 */
+    private static final class MutableClock extends Clock {
+
+        private Instant now;
+        private final ZoneId zone;
+
+        MutableClock(Instant now) {
+            this(now, ZoneOffset.UTC);
+        }
+
+        private MutableClock(Instant now, ZoneId zone) {
+            this.now = now;
+            this.zone = zone;
+        }
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return zone;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return new MutableClock(now, zone);
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
+
+    /** 可配置结果或异常的网站客户端替身，并记录最后一次调用参数。 */
+    private static final class StubWebsite implements WebsiteClient {
+
+        private VerifyResult result = VerifyResult.unreachable();
+        private RuntimeException failure;
+        private String lastCode;
+        private String lastGameId;
+        private UUID lastUuid;
+
+        @Override
+        public VerifyResult verify(String code, String gameId, UUID uuid) {
+            lastCode = code;
+            lastGameId = gameId;
+            lastUuid = uuid;
+            if (failure != null) {
+                throw failure;
+            }
+            return result;
+        }
+
+        @Override
+        public HealthResult health() {
+            return HealthResult.healthy(0L);
+        }
+    }
+}

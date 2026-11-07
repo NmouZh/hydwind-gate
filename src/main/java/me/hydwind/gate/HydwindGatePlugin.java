@@ -7,7 +7,9 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import java.io.IOException;
@@ -15,18 +17,27 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import me.hydwind.gate.admin.AdminActionService;
+import me.hydwind.gate.auth.LoginSession;
 import me.hydwind.gate.auth.LoginSessionStore;
 import me.hydwind.gate.command.AdminCommandExecutor;
 import me.hydwind.gate.command.HydwindCommand;
+import me.hydwind.gate.compat.LimboCompat;
 import me.hydwind.gate.compat.VersionCompat;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.config.RestartSettings;
 import me.hydwind.gate.login.LimboLoginService;
 import me.hydwind.gate.login.LoginGateListener;
+import me.hydwind.gate.runtime.RuntimeHolder;
+import me.hydwind.gate.runtime.RuntimeSnapshot;
 import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.web.HttpWebsiteClient;
 import me.hydwind.gate.web.RestartPolicy;
@@ -40,9 +51,13 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 /**
  * HydwindGate 的 Velocity 插件入口。
  *
- * <p>启动时检查 Velocity 版本与 LimboAPI 是否满足要求，然后装配网站客户端、
- * 会话存储、受控重启组件、limbo 登录流程与 {@code /hydwind} 管理命令。
- * 任何关键组件初始化失败都会关闭代理，避免在没有门禁的情况下放行玩家。</p>
+ * <p>启动时检查 Velocity 版本与 LimboAPI 版本，然后装配网站客户端、会话存储、
+ * 受控重启组件、limbo 登录流程与 {@code /hydwind} 管理命令。任何关键组件初始化
+ * 失败都会关闭代理，避免在没有门禁的情况下放行玩家。</p>
+ *
+ * <p>配置、文案、网站客户端与重启触发器组成一整代 {@link RuntimeSnapshot}；
+ * 热重载时构建完整的新代际、一次发布并关闭旧代际。读取方通过 {@link #runtime()}
+ * 或各个 accessor 取值，未发布时访问会抛出 {@link IllegalStateException}。</p>
  */
 @Plugin(
         id = "hydwind-gate",
@@ -66,13 +81,13 @@ public final class HydwindGatePlugin {
     private final ProxyServer server;
     private final Logger logger;
     private final Path dataDirectory;
+    /** 运行时代际；配置、文案、网站客户端与重启触发器整代替换。 */
+    private final RuntimeHolder runtimeHolder = new RuntimeHolder();
 
-    private PluginConfig pluginConfig;
-    private Messages messages;
+    // 以下两项跨代际保留：会话不能因 reload 丢失，重启冷却与计数也不能被 reload 重置。
     private LoginSessionStore sessionStore;
-    private WebsiteClient websiteClient;
     private RestartPolicy restartPolicy;
-    private RestartTrigger restartTrigger;
+
     private LimboLoginService limboLoginService;
     private AdminCommandExecutor adminCommandExecutor;
     private ScheduledTask sessionMaintenanceTask;
@@ -89,38 +104,42 @@ public final class HydwindGatePlugin {
         if (!ensureCompatibleRuntime()) {
             return;
         }
-        loadConfiguration();
 
-        limboLoginService = new LimboLoginService(this, server, logger);
+        // 装配体的任何一步失败都不能继续以“无门禁”状态运行；统一关闭代理。
         try {
+            loadConfiguration();
+
+            limboLoginService = new LimboLoginService(this, server, logger);
             limboLoginService.initialize();
+
+            server.getEventManager().register(this, new LoginGateListener(this, limboLoginService, logger));
+
+            adminCommandExecutor = new AdminCommandExecutor(this,
+                    new AdminActionService(sessionStore, limboLoginService, backendPlayers(), clock),
+                    sessionStore, limboLoginService, this::reloadConfiguration);
+            CommandMeta commandMeta = server.getCommandManager()
+                    .metaBuilder("hydwind")
+                    .plugin(this)
+                    .build();
+            server.getCommandManager().register(commandMeta, new HydwindCommand(this, adminCommandExecutor));
+
+            sessionMaintenanceTask = server.getScheduler()
+                    .buildTask(this, this::expireDisconnectedSessions)
+                    .delay(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
+                    .repeat(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
+                    .schedule();
+
+            PluginConfig config = pluginConfig();
+            logger.info("HydwindGate {} enabled (main server: {}, limbo world: {}).",
+                    VERSION, config.mainServer(), config.limboWorld());
+            logger.info("Website: {}, health path: {}, restart request: {}.",
+                    config.websiteBaseUrl(), config.healthPath(),
+                    config.restart().requestFile());
         } catch (RuntimeException exception) {
-            // 没有 limbo 就无法拦截未认证玩家；宁可关闭代理也不放行。
-            logger.error("Failed to initialize the limbo login gate; shutting the proxy down.", exception);
+            logger.error("Failed to initialize HydwindGate; shutting the proxy down instead of "
+                    + "running without a login gate.", exception);
             server.shutdown();
-            return;
         }
-
-        server.getEventManager().register(this, new LoginGateListener(this, limboLoginService, logger));
-
-        adminCommandExecutor = new AdminCommandExecutor(this, limboLoginService);
-        CommandMeta commandMeta = server.getCommandManager()
-                .metaBuilder("hydwind")
-                .plugin(this)
-                .build();
-        server.getCommandManager().register(commandMeta, new HydwindCommand(this, adminCommandExecutor));
-
-        sessionMaintenanceTask = server.getScheduler()
-                .buildTask(this, this::expireDisconnectedSessions)
-                .delay(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
-                .repeat(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
-                .schedule();
-
-        logger.info("HydwindGate {} enabled (main server: {}, limbo world: {}).",
-                VERSION, pluginConfig.mainServer(), pluginConfig.limboWorld());
-        logger.info("Website: {}, health path: {}, restart request: {}.",
-                pluginConfig.websiteBaseUrl(), pluginConfig.healthPath(),
-                pluginConfig.restart().requestFile());
     }
 
     @Subscribe
@@ -129,41 +148,85 @@ public final class HydwindGatePlugin {
             sessionMaintenanceTask.cancel();
             sessionMaintenanceTask = null;
         }
+        // 先释放 limbo（会清理仍留在 limbo 的玩家），再关闭当前运行时资源（HTTP 连接池）。
         if (limboLoginService != null) {
             limboLoginService.shutdown();
         }
+        runtimeHolder.close();
         logger.info("HydwindGate disabled.");
     }
 
     /**
-     * 重新读取 {@code config.yml} 并重建依赖配置的组件。会话存储与重启计数被保留，
+     * 重新读取 {@code config.yml} 并构建完整的新运行时代际。会话存储与重启计数被保留，
      * 因此热重载不会打断进行中的登录，也不会清空重启冷却。
+     *
+     * <p>新代际一次发布，旧代际随后关闭；发布之后到达的读取方要么看到完整旧代际，
+     * 要么看到完整新代际。方法加 {@code synchronized}，避免并发 reload 交错替换。</p>
      *
      * <p>{@code auth.session-grace-seconds} 立即生效；{@code auth.prompt-interval-seconds}
      * 与 {@code auth.login-timeout-seconds} 只对之后进入 limbo 的会话生效，因为已 spawn
      * 的会话定时器无法安全重排。</p>
      */
-    public void reloadConfiguration() {
-        String previousLimbo = limboKey(pluginConfig);
+    public synchronized void reloadConfiguration() {
+        PluginConfig previous = currentConfigOrNull();
         loadConfiguration();
-        if (previousLimbo != null && !previousLimbo.equals(limboKey(pluginConfig))) {
+        PluginConfig current = pluginConfig();
+        if (previous != null && !limboKey(previous).equals(limboKey(current))) {
             logger.warn("limbo.world or limbo.spawn changed; restart the proxy to apply them "
                     + "(the current limbo and its players are kept).");
         }
         logger.info("Configuration reloaded; active login sessions were preserved.");
     }
 
+    /**
+     * 60 秒兜底 sweep：先按会话自己的 {@code loginDeadline} 标记超时（主要踢出路径仍是
+     * per-player 定时任务），再清理超过断线宽限的认证记录。
+     */
+    /**
+     * 把 Velocity 的在线玩家视图适配成 {@link AdminActionService.BackendPlayers}。
+     * 管理动作 Module 只依赖这个窄 Interface，不直接认识 {@link ProxyServer}。
+     */
+    private AdminActionService.BackendPlayers backendPlayers() {
+        return new AdminActionService.BackendPlayers() {
+            @Override
+            public Optional<UUID> findOnline(String gameId) {
+                return server.getPlayer(gameId).map(Player::getUniqueId);
+            }
+
+            @Override
+            public void disconnect(UUID uuid, String message) {
+                server.getPlayer(uuid).ifPresent(player ->
+                        player.disconnect(net.kyori.adventure.text.Component.text(message)));
+            }
+
+            @Override
+            public Optional<String> nameOf(UUID uuid) {
+                return server.getPlayer(uuid).map(Player::getUsername);
+            }
+        };
+    }
+
     private void expireDisconnectedSessions() {
-        int removed = sessionStore.expireGrace(clock.instant());
+        Instant now = clock.instant();
+        List<LoginSession> timedOut = sessionStore.timeOutAll(now);
+        if (!timedOut.isEmpty()) {
+            logger.info("Timed out {} pending login session(s): {}",
+                    timedOut.size(), timedOut.stream().map(LoginSession::gameId).toList());
+        }
+        int removed = sessionStore.expireGrace(now);
         if (removed > 0) {
             logger.info("Expired {} reconnect grace record(s).", removed);
         }
     }
 
     private static String limboKey(PluginConfig config) {
-        return config == null ? null : config.limboWorld() + "|" + config.limboSpawn();
+        return config.limboWorld() + "|" + config.limboSpawn();
     }
 
+    /**
+     * 读取配置并构建、发布一整代运行时依赖。会话存储与重启策略是长生命周期对象：
+     * 首次创建，之后只更新各自的配置项，不随代际替换。
+     */
     private void loadConfiguration() {
         Map<String, Object> raw = readConfigFile();
         PluginConfig config = PluginConfig.from(raw);
@@ -176,15 +239,27 @@ public final class HydwindGatePlugin {
         if (config.websiteBaseUrl().isBlank()) {
             throw new IllegalStateException("website.base-url must not be blank");
         }
+        // TODO: Messages.placeholderWarnings(raw) 落地后，在这里逐条记录 WARN（当前磁盘上的
+        // Messages 尚无该方法，按 ADR 由 ui 改造 Agent 提供，本文件暂不调用以免编译失败）。
 
-        WebsiteClient client = new HttpWebsiteClient(config);
         RestartSettings restartSettings = config.restart();
         if (restartPolicy == null) {
             restartPolicy = new RestartPolicy(restartSettings);
-        } else {
-            restartPolicy.reconfigure(restartSettings);
         }
 
+        HttpWebsiteClient client = new HttpWebsiteClient(config);
+        RestartTrigger trigger;
+        try {
+            trigger = new RestartTrigger(client, restartPolicy, restartSettings, clock, logger);
+        } catch (RuntimeException exception) {
+            // 新客户端尚未发布；构造失败时立即关闭，避免连接池泄漏。
+            client.close();
+            throw exception;
+        }
+
+        // 长生命周期状态在新客户端构造成功之后、发布之前更新：构造失败时旧代际保持原样。
+        // 重启策略只更新配置并保留已记录的触发历史，避免 reload 清空冷却与窗口内计数。
+        restartPolicy.reconfigure(restartSettings);
         // 只在首次装配，重载时保留内存中的认证会话与断线宽限记录。
         if (sessionStore == null) {
             sessionStore = new LoginSessionStore(config.reconnectGrace());
@@ -193,11 +268,11 @@ public final class HydwindGatePlugin {
             sessionStore.setReconnectGrace(config.reconnectGrace());
         }
 
-        this.pluginConfig = config;
-        this.messages = newMessages;
-        this.websiteClient = client;
-        this.restartTrigger = new RestartTrigger(client, restartPolicy, restartSettings,
-                clock, logger);
+        RuntimeSnapshot previous = runtimeHolder.publish(
+                new RuntimeSnapshot(config, newMessages, client, trigger));
+        if (previous != null) {
+            previous.close();
+        }
     }
 
     /**
@@ -214,15 +289,42 @@ public final class HydwindGatePlugin {
             return false;
         }
 
-        if (server.getPluginManager().getPlugin("limboapi").isEmpty()) {
-            logger.error("LimboAPI is not loaded; install limboapi-1.2.0.jar in the proxy plugins "
-                    + "directory. HydwindGate cannot gate players without limbo and will shut down.");
+        Optional<PluginContainer> limboPlugin = server.getPluginManager().getPlugin("limboapi");
+        if (limboPlugin.isEmpty()) {
+            logger.error("LimboAPI is not loaded; install limboapi-{}.jar in the proxy plugins "
+                            + "directory. HydwindGate cannot gate players without limbo and will shut down.",
+                    LimboCompat.MINIMUM_LIMBO_VERSION);
             server.shutdown();
             return false;
         }
 
-        logger.info("Runtime checks passed: Velocity {}, LimboAPI present.", velocityVersion);
+        String limboVersion = limboPlugin.get().getDescription().getVersion().orElse("");
+        if (!LimboCompat.isSupported(limboVersion)) {
+            logger.error("HydwindGate requires LimboAPI {} or newer, but this proxy reports '{}'. "
+                            + "Shutting the proxy down instead of running without a login gate.",
+                    LimboCompat.MINIMUM_LIMBO_VERSION,
+                    limboVersion.isBlank() ? "<unknown>" : limboVersion);
+            server.shutdown();
+            return false;
+        }
+
+        // 构建期与运行时 LimboAPI 不一致时只告警：版本号相同（忽略 -SNAPSHOT 等后缀）视为一致。
+        LimboCompat.bundledVersion().ifPresent(bundled -> {
+            if (!sameVersion(bundled, limboVersion)) {
+                logger.warn("HydwindGate was built against LimboAPI {} but this proxy runs {}; "
+                                + "LimboAPI is tightly coupled to the proxy and Minecraft version, "
+                                + "verify the installed jar.",
+                        bundled, limboVersion);
+            }
+        });
+
+        logger.info("Runtime checks passed: Velocity {}, LimboAPI {}.", velocityVersion, limboVersion);
         return true;
+    }
+
+    /** 只比较版本数字部分，避免 {@code 1.2.0} 与 {@code 1.2.0-SNAPSHOT} 被误报为不一致。 */
+    private static boolean sameVersion(String left, String right) {
+        return VersionCompat.isAtLeast(left, right) && VersionCompat.isAtLeast(right, left);
     }
 
     private Map<String, Object> readConfigFile() {
@@ -261,6 +363,26 @@ public final class HydwindGatePlugin {
         }
     }
 
+    private PluginConfig currentConfigOrNull() {
+        RuntimeSnapshot snapshot = runtimeHolder.current();
+        return snapshot == null ? null : snapshot.config();
+    }
+
+    /** 取当前已发布的代际；尚未发布时抛出明确异常，而不是返回 null 让调用方在远处失败。 */
+    private RuntimeSnapshot publishedRuntime() {
+        RuntimeSnapshot snapshot = runtimeHolder.current();
+        if (snapshot == null) {
+            throw new IllegalStateException(
+                    "运行时配置尚未发布；请在代理初始化完成后再访问 HydwindGate。");
+        }
+        return snapshot;
+    }
+
+    /** 运行时代际持有者；读取方应在一次操作内取一次快照并复用。 */
+    public RuntimeHolder runtime() {
+        return runtimeHolder;
+    }
+
     public ProxyServer proxyServer() {
         return server;
     }
@@ -274,11 +396,11 @@ public final class HydwindGatePlugin {
     }
 
     public PluginConfig pluginConfig() {
-        return pluginConfig;
+        return publishedRuntime().config();
     }
 
     public Messages messages() {
-        return messages;
+        return publishedRuntime().messages();
     }
 
     public LoginSessionStore sessionStore() {
@@ -286,7 +408,7 @@ public final class HydwindGatePlugin {
     }
 
     public WebsiteClient websiteClient() {
-        return websiteClient;
+        return publishedRuntime().websiteClient();
     }
 
     public RestartPolicy restartPolicy() {
@@ -294,7 +416,7 @@ public final class HydwindGatePlugin {
     }
 
     public RestartTrigger restartTrigger() {
-        return restartTrigger;
+        return publishedRuntime().restartTrigger();
     }
 
     public AdminCommandExecutor adminCommandExecutor() {
