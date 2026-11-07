@@ -56,7 +56,7 @@
 
 - `config`：`PluginConfig`，YAML 配置，支持热重载。
 - `auth`：`LoginManager`、`LoginSession`、`LoginSessionStore`、`KaomojiCode`。
-- `web`：`WebsiteClient`（接口 + HTTP 实现）、`HealthProbe`、`RestartPolicy`、`RestartTrigger`。
+- `web`：`WebsiteClient`（接口 + HTTP 实现）、`RestartPolicy`、`RestartTrigger`；健康检查是 `WebsiteClient.health()` 的方法，不单独设 `HealthProbe`。
 - `listener`：`JoinListener`、`DialogListener`、`QuitListener`、`FreezeController`。
 - `command`：`LoginCommand`、`AdminCommand`。
 - `ui`：`DialogFactory`、`Messages`。

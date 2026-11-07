@@ -50,7 +50,7 @@ public final class HydwindGatePlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         sessionStore = new LoginSessionStore(PluginConfig.from(getConfig()).reconnectGrace());
-        freezeController = new FreezeController(this, this::resolveSpawn);
+        freezeController = new FreezeController(this, this::resolveSpawn, this::adminPermission);
         rebuildRuntime();
 
         // 任务只启动一次；lambda 每次读取当前 loginManager，重载后自动使用新实例。
@@ -94,8 +94,12 @@ public final class HydwindGatePlugin extends JavaPlugin {
 
         websiteClient = new HttpWebsiteClient(pluginConfig);
         RestartSettings restartSettings = pluginConfig.restart();
-        restartPolicy = new RestartPolicy(restartSettings.cooldown(), restartSettings.window(),
-                restartSettings.maxPerWindow());
+        // 热重载保留同一个策略实例，冷却与窗口内计数不会被清零。
+        if (restartPolicy == null) {
+            restartPolicy = new RestartPolicy(restartSettings);
+        } else {
+            restartPolicy.reconfigure(restartSettings);
+        }
         restartTrigger = new RestartTrigger(websiteClient, restartPolicy, restartSettings,
                 clock, getLogger());
         dialogFactory = new DialogFactory(pluginConfig, messages);
@@ -139,15 +143,22 @@ public final class HydwindGatePlugin extends JavaPlugin {
             return;
         }
         AdminService adminService = new AdminService(sessionStore, playerGateway,
-                websiteClient, restartPolicy, clock);
+                websiteClient, restartPolicy, clock, messages);
         AdminCommand executor = new AdminCommand(
                 adminService,
                 () -> pluginConfig.adminPermission(),
                 this::reloadRuntime,
                 asyncExecutor,
-                runnable -> getServer().getScheduler().runTask(this, runnable));
+                runnable -> getServer().getScheduler().runTask(this, runnable),
+                messages);
         adminCommand.setExecutor(executor);
         adminCommand.setTabCompleter(executor);
+    }
+
+    private String adminPermission() {
+        return pluginConfig == null
+                ? PluginConfig.DEFAULT_ADMIN_PERMISSION
+                : pluginConfig.adminPermission();
     }
 
     private Location resolveSpawn() {

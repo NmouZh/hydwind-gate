@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import me.hydwind.gate.config.RestartSettings;
 
 /**
  * 受控重启的准入策略：两次重启至少相隔 10 分钟，任意滚动一小时内最多 2 次。
@@ -19,19 +20,35 @@ public final class RestartPolicy {
     static final Duration WINDOW = Duration.ofHours(1);
     static final int MAX_PER_WINDOW = 2;
 
-    private final Duration cooldown;
-    private final Duration window;
-    private final int maxPerWindow;
+    private Duration cooldown;
+    private Duration window;
+    private int maxPerWindow;
     private final List<Instant> acquisitions = new ArrayList<>();
 
     public RestartPolicy() {
         this(COOLDOWN, WINDOW, MAX_PER_WINDOW);
     }
 
+    public RestartPolicy(RestartSettings settings) {
+        this(Objects.requireNonNull(settings, "settings").cooldown(),
+                settings.window(), settings.maxPerWindow());
+    }
+
     public RestartPolicy(Duration cooldown, Duration window, int maxPerWindow) {
         this.cooldown = Objects.requireNonNull(cooldown, "cooldown");
         this.window = Objects.requireNonNull(window, "window");
         this.maxPerWindow = maxPerWindow;
+    }
+
+    /**
+     * 用热重载后的配置更新策略，但保留已记录的触发历史，
+     * 避免 reload 清空冷却和窗口内计数。
+     */
+    public synchronized void reconfigure(RestartSettings settings) {
+        Objects.requireNonNull(settings, "settings");
+        this.cooldown = Objects.requireNonNull(settings.cooldown(), "cooldown");
+        this.window = Objects.requireNonNull(settings.window(), "window");
+        this.maxPerWindow = settings.maxPerWindow();
     }
 
     /**

@@ -17,6 +17,7 @@ dependencies {
     // Paper 运行时已内置 Gson；compileOnly 避免打包重复类。
     // 测试环境没有 Paper，所以测试运行时显式引入同一 API 版本。
     compileOnly("com.google.code.gson:gson:2.11.0")
+    testImplementation("io.papermc.paper:paper-api:26.3.build.244-stable")
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("com.google.code.gson:gson:2.11.0")

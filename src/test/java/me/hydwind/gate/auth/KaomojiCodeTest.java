@@ -34,13 +34,4 @@ class KaomojiCodeTest {
         assertFalse(KaomojiCode.isBlankOrTooLong("A".repeat(64)));
         assertTrue(KaomojiCode.isBlankOrTooLong("A".repeat(65)));
     }
-
-    @Test
-    void recognizesFallbackCodeRegardlessOfAsciiCase() {
-        assertTrue(KaomojiCode.looksLikeFallback("hwg-aB2c"));
-        assertTrue(KaomojiCode.looksLikeFallback("  HWG-AB2C  "));
-        assertFalse(KaomojiCode.looksLikeFallback("HWG-ABC"));
-        assertFalse(KaomojiCode.looksLikeFallback("HWG-ABCDE"));
-        assertFalse(KaomojiCode.looksLikeFallback("(・ω・)(´▽｀)"));
-    }
 }

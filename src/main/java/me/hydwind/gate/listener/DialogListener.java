@@ -14,7 +14,7 @@ import org.bukkit.event.Listener;
  * 处理登录对话框上的自定义按钮点击。
  *
  * <p>只接受本插件定义的 identifier，并通过 {@link PlayerGameConnection} 取回玩家；
- * 验证码从 {@link DialogResponseView#getText(String)} 读取。
+ * 登录码从 {@link DialogResponseView#getText(String)} 读取。
  */
 public final class DialogListener implements Listener {
 
@@ -27,9 +27,7 @@ public final class DialogListener implements Listener {
     @EventHandler
     public void onCustomClick(PlayerCustomClickEvent event) {
         Key identifier = event.getIdentifier();
-        boolean submit = DialogFactory.SUBMIT_ACTION.equals(identifier);
-        boolean reopen = DialogFactory.REOPEN_ACTION.equals(identifier);
-        if (!submit && !reopen) {
+        if (!DialogFactory.SUBMIT_ACTION.equals(identifier)) {
             return;
         }
         if (!(event.getCommonConnection() instanceof PlayerGameConnection connection)) {
@@ -37,11 +35,6 @@ public final class DialogListener implements Listener {
         }
         Player player = connection.getPlayer();
         if (player == null) {
-            return;
-        }
-
-        if (reopen) {
-            loginManager.reopenDialog(player.getUniqueId());
             return;
         }
 

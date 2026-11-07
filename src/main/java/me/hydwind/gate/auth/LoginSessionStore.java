@@ -95,11 +95,7 @@ public final class LoginSessionStore {
         if (session == null) {
             return false;
         }
-        if (session.status() != LoginSession.Status.PENDING
-                && session.status() != LoginSession.Status.VERIFYING) {
-            return false;
-        }
-        if (Duration.between(session.enteredAt(), now).compareTo(limit) < 0) {
+        if (!awaitingAuthentication(session) || !hasExceededTimeout(session, now, limit)) {
             return false;
         }
         sessions.put(uuid, session.transitionTo(LoginSession.Status.TIMED_OUT, now));
@@ -131,11 +127,7 @@ public final class LoginSessionStore {
         Objects.requireNonNull(limit, "limit");
         List<LoginSession> timedOut = new ArrayList<>();
         for (LoginSession session : List.copyOf(sessions.values())) {
-            if (session.status() != LoginSession.Status.PENDING
-                    && session.status() != LoginSession.Status.VERIFYING) {
-                continue;
-            }
-            if (Duration.between(session.enteredAt(), now).compareTo(limit) < 0) {
+            if (!awaitingAuthentication(session) || !hasExceededTimeout(session, now, limit)) {
                 continue;
             }
             LoginSession updated = session.transitionTo(LoginSession.Status.TIMED_OUT, now);
@@ -200,6 +192,15 @@ public final class LoginSessionStore {
     private LoginSession update(LoginSession session) {
         sessions.put(session.uuid(), session);
         return session;
+    }
+
+    private static boolean awaitingAuthentication(LoginSession session) {
+        return session.status() == LoginSession.Status.PENDING
+                || session.status() == LoginSession.Status.VERIFYING;
+    }
+
+    private static boolean hasExceededTimeout(LoginSession session, Instant now, Duration limit) {
+        return Duration.between(session.enteredAt(), now).compareTo(limit) >= 0;
     }
 
     private boolean withinGrace(LoginSession session, String gameId, String ip, Instant now) {

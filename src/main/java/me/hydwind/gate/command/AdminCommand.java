@@ -9,6 +9,8 @@ import java.util.function.Supplier;
 import me.hydwind.gate.auth.AdminService;
 import me.hydwind.gate.auth.AdminService.Result;
 import me.hydwind.gate.auth.AdminService.Status;
+import me.hydwind.gate.ui.AdminMessages;
+import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.web.HealthResult;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -30,27 +32,31 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
     private final Runnable reloadAction;
     private final Executor asyncExecutor;
     private final Consumer<Runnable> mainThreadExecutor;
+    private final Messages messages;
 
     public AdminCommand(AdminService adminService,
                         Supplier<String> permission,
                         Runnable reloadAction,
                         Executor asyncExecutor,
-                        Consumer<Runnable> mainThreadExecutor) {
+                        Consumer<Runnable> mainThreadExecutor,
+                        Messages messages) {
         this.adminService = adminService;
         this.permission = permission;
         this.reloadAction = reloadAction;
         this.asyncExecutor = asyncExecutor;
         this.mainThreadExecutor = mainThreadExecutor;
+        this.messages = messages;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        AdminMessages admin = messages.admin();
         if (!sender.hasPermission(permission.get())) {
-            sender.sendMessage("你没有权限使用 /hydwind（需要 " + permission.get() + "）。");
+            sender.sendMessage(admin.noPermission().replace("{permission}", permission.get()));
             return true;
         }
         if (args.length == 0) {
-            sender.sendMessage("用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>");
+            sender.sendMessage(admin.usage());
             return true;
         }
 
@@ -58,23 +64,23 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
             case "status" -> runStatus(sender);
             case "reload" -> {
                 reloadAction.run();
-                sender.sendMessage("配置已重载；进行中的登录会话保持不变。");
+                sender.sendMessage(admin.reloaded());
             }
             case "approve" -> {
                 if (args.length < 2) {
-                    sender.sendMessage("用法: /hydwind approve <玩家>");
+                    sender.sendMessage(admin.approveUsage());
                 } else {
                     sendResult(sender, adminService.approve(args[1]));
                 }
             }
             case "kick" -> {
                 if (args.length < 2) {
-                    sender.sendMessage("用法: /hydwind kick <玩家>");
+                    sender.sendMessage(admin.kickUsage());
                 } else {
                     sendResult(sender, adminService.kick(args[1]));
                 }
             }
-            default -> sender.sendMessage("未知子命令。用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>");
+            default -> sender.sendMessage(admin.unknownSubcommand());
         }
         return true;
     }
@@ -87,23 +93,29 @@ public final class AdminCommand implements CommandExecutor, TabCompleter {
         });
     }
 
-    private static List<String> formatStatus(Status status, String permission) {
+    private List<String> formatStatus(Status status, String permission) {
+        AdminMessages admin = messages.admin();
         HealthResult health = status.health();
         String healthLine = health != null && health.healthy()
-                ? "网站: 健康（uptime " + health.uptimeSeconds() + " 秒）"
-                : "网站: 不可达";
-        String restartLine = "重启额度: " + status.restartRemaining() + " 次可用";
+                ? admin.statusHealthHealthy().replace("{uptime}", Long.toString(health.uptimeSeconds()))
+                : admin.statusHealthUnhealthy();
+        String restartLine = admin.statusRestartQuota()
+                .replace("{remaining}", Integer.toString(status.restartRemaining()));
         String nextAllowed = status.nextRestartAllowedAt()
                 .map(AdminCommand::formatInstant)
-                .map(value -> "（下次允许 " + value + "）")
+                .map(value -> admin.statusNextAllowed().replace("{time}", value))
                 .orElse("");
+        String authenticated = status.grace() > 0
+                ? admin.statusAuthenticatedGrace()
+                        .replace("{count}", Integer.toString(status.authenticated()))
+                        .replace("{grace}", Integer.toString(status.grace()))
+                : admin.statusAuthenticated().replace("{count}", Integer.toString(status.authenticated()));
         return List.of(
-                "待认证: " + status.pending(),
-                "已认证: " + status.authenticated()
-                        + (status.grace() > 0 ? "（其中离线宽限 " + status.grace() + "）" : ""),
+                admin.statusPending().replace("{count}", Integer.toString(status.pending())),
+                authenticated,
                 healthLine,
                 restartLine + nextAllowed,
-                "管理员权限: " + permission);
+                admin.statusPermission().replace("{permission}", permission));
     }
 
     private static String formatInstant(Instant instant) {

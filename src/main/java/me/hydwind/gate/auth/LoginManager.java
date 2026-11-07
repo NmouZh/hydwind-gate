@@ -1,6 +1,5 @@
 package me.hydwind.gate.auth;
 
-import java.text.Normalizer;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -102,9 +101,10 @@ public final class LoginManager {
             }
         }
 
-        String code = normalize(rawCode);
-        if (code.isEmpty()) {
-            playerGateway.sendMessage(uuid, messages.emptyCode());
+        String code = KaomojiCode.normalize(rawCode);
+        if (KaomojiCode.isBlankOrTooLong(rawCode)) {
+            playerGateway.sendMessage(uuid,
+                    code == null || code.isBlank() ? messages.emptyCode() : messages.codeTooLong());
             return;
         }
         if (!sessionStore.beginVerification(uuid, clock.instant())) {
@@ -156,14 +156,18 @@ public final class LoginManager {
                 if (!sessionStore.authenticationSucceeded(uuid, clock.instant())) {
                     return;
                 }
-                playerGateway.sendMessage(uuid, messages.loginSuccess()
+                String template = isAdmin(result.role())
+                        ? messages.loginSuccessAdmin()
+                        : messages.loginSuccess();
+                playerGateway.sendMessage(uuid, template
                         .replace("{name}", displayName(session, result)));
                 playerGateway.unfreeze(uuid);
             }
             case INVALID_CODE -> reject(uuid, messages.invalidCode());
             case EXPIRED -> reject(uuid, messages.expiredCode());
             case USED -> reject(uuid, messages.usedCode());
-            case GAME_ID_MISMATCH -> reject(uuid, messages.gameIdMismatch());
+            case GAME_ID_MISMATCH -> reject(uuid, gameIdMismatchMessage(result));
+            case RATE_LIMITED -> reject(uuid, rateLimitedMessage(result));
             case UNREACHABLE -> {
                 notifyUnreachable(uuid);
                 reject(uuid, messages.serviceUnavailable());
@@ -204,11 +208,24 @@ public final class LoginManager {
         return session.gameId();
     }
 
-    /** 统一使用 NFC 并去除首尾空白，避免颜文字因输入法差异无法匹配。 */
-    private static String normalize(String rawCode) {
-        if (rawCode == null) {
-            return "";
+    private static boolean isAdmin(String role) {
+        return role != null && role.equalsIgnoreCase("admin");
+    }
+
+    private String gameIdMismatchMessage(VerifyResult result) {
+        String expected = result.expectedGameId();
+        if (expected == null || expected.isBlank()) {
+            return messages.gameIdMismatch();
         }
-        return Normalizer.normalize(rawCode, Normalizer.Form.NFC).trim();
+        return messages.gameIdMismatchExpected().replace("{expectedGameId}", expected);
+    }
+
+    private String rateLimitedMessage(VerifyResult result) {
+        Long retryAfterMs = result.retryAfterMs();
+        if (retryAfterMs == null || retryAfterMs < 0) {
+            return messages.rateLimitedNoRetry();
+        }
+        long seconds = Math.max(1, (retryAfterMs + 999) / 1000);
+        return messages.rateLimited().replace("{seconds}", Long.toString(seconds));
     }
 }

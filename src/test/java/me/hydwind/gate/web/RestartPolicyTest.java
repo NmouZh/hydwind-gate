@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.nio.file.Path;
+import me.hydwind.gate.config.RestartSettings;
 import org.junit.jupiter.api.Test;
 
 class RestartPolicyTest {
@@ -50,5 +52,31 @@ class RestartPolicyTest {
         assertTrue(policy.tryAcquire(START));
         assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(3))), "每小时上限为 1");
         assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(30))), "窗口滑出后恢复额度");
+    }
+
+    @Test
+    void settingsConstructorKeepsTheSameLimits() {
+        RestartPolicy policy = new RestartPolicy(settings(Duration.ofMinutes(5), Duration.ofHours(2), 3));
+        assertEquals(3, policy.remaining(START));
+        assertTrue(policy.tryAcquire(START));
+        assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(4))));
+        assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(5))));
+    }
+
+    @Test
+    void reconfigureKeepsAcquisitionsAndCooldown() {
+        RestartPolicy policy = new RestartPolicy();
+        assertTrue(policy.tryAcquire(START));
+
+        policy.reconfigure(settings(Duration.ofMinutes(10), Duration.ofHours(1), 2));
+
+        assertEquals(0, policy.remaining(START.plus(Duration.ofMinutes(5))),
+                "reload 后已触发的冷却与计数不应被清零");
+        assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(5))));
+        assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(10))));
+    }
+
+    private static RestartSettings settings(Duration cooldown, Duration window, int maxPerWindow) {
+        return new RestartSettings(Path.of("/tmp/restart-request"), cooldown, window, maxPerWindow);
     }
 }

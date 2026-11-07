@@ -10,6 +10,7 @@ import io.papermc.paper.registry.data.dialog.type.DialogType;
 import java.util.List;
 import java.util.Objects;
 import me.hydwind.gate.config.PluginConfig;
+import me.hydwind.gate.web.Urls;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -25,7 +26,6 @@ public final class DialogFactory {
 
     public static final String CODE_INPUT_KEY = "code";
     public static final Key SUBMIT_ACTION = Key.key("hydwind:login/submit");
-    public static final Key REOPEN_ACTION = Key.key("hydwind:login/reopen");
 
     private static final int INPUT_MAX_LENGTH = 64;
     private static final int INPUT_WIDTH = 300;
@@ -46,7 +46,7 @@ public final class DialogFactory {
     /** 创建登录对话框；每次调用返回新实例，可安全地重复展示。 */
     public Dialog create() {
         Component title = Component.text(messages.gateTitle(), NamedTextColor.GOLD);
-        Component prompt = Component.text(messages.gatePrompt().replace("{url}", websiteUrl),
+        Component prompt = Component.text(renderPrompt(messages.gatePrompt(), websiteUrl),
                         NamedTextColor.GRAY)
                 .clickEvent(ClickEvent.openUrl(websiteUrl))
                 .hoverEvent(HoverEvent.showText(Component.text(websiteUrl)));
@@ -60,7 +60,7 @@ public final class DialogFactory {
                 Component.text(messages.reopenButton(), NamedTextColor.AQUA),
                 Component.text(messages.reopenTooltip()),
                 BUTTON_WIDTH,
-                DialogAction.customClick(REOPEN_ACTION, null));
+                DialogAction.staticAction(ClickEvent.openUrl(websiteUrl)));
 
         return Dialog.create(builder -> builder.empty()
                 .base(DialogBase.builder(title)
@@ -78,11 +78,20 @@ public final class DialogFactory {
         return websiteUrl;
     }
 
+    /**
+     * 把网址放进对话框正文。配置里的模板可使用 {@code {url}}；
+     * 若模板没写占位符，也补上网址，避免玩家看不到入口。
+     */
+    static String renderPrompt(String template, String url) {
+        String text = template == null ? "" : template.replace("{url}", url);
+        if (url != null && !url.isEmpty() && !text.contains(url)) {
+            text = text.isBlank() ? url : text + " " + url;
+        }
+        return text;
+    }
+
     private static String gateUrl(String websiteBaseUrl) {
         String base = websiteBaseUrl == null ? "" : websiteBaseUrl.trim();
-        while (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
-        }
-        return base + "/gate";
+        return Urls.stripTrailingSlashes(base) + "/gate";
     }
 }

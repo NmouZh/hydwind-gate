@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import me.hydwind.gate.auth.AdminService.Outcome;
+import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.ui.PlayerGateway;
 import me.hydwind.gate.web.HealthResult;
 import me.hydwind.gate.web.RestartPolicy;
@@ -42,7 +43,7 @@ class AdminServiceTest {
         gateway = new FakePlayerGateway();
         restartPolicy = new RestartPolicy();
         clock = new MutableClock(START);
-        service = new AdminService(store, gateway, website, restartPolicy, clock);
+        service = new AdminService(store, gateway, website, restartPolicy, clock, Messages.defaults());
     }
 
     @Test

@@ -40,7 +40,7 @@ public final class HttpWebsiteClient implements WebsiteClient {
         if (url.isEmpty()) {
             throw new IllegalArgumentException("website base URL must not be blank");
         }
-        this.baseUrl = stripTrailingSlash(url);
+        this.baseUrl = Urls.stripTrailingSlashes(url);
         this.pluginToken = config.pluginToken() == null ? "" : config.pluginToken();
         this.readTimeout = Duration.ofMillis(positiveOrDefault(
                 config.readTimeoutMillis(), DEFAULT_READ_TIMEOUT_MILLIS));
@@ -73,7 +73,8 @@ public final class HttpWebsiteClient implements WebsiteClient {
         try {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return mapVerifyResponse(response.statusCode(), response.body());
+            String retryAfterHeader = response.headers().firstValue("Retry-After").orElse(null);
+            return mapVerifyResponse(response.statusCode(), response.body(), retryAfterHeader);
         } catch (IOException e) {
             return VerifyResult.unreachable();
         } catch (InterruptedException e) {
@@ -104,10 +105,15 @@ public final class HttpWebsiteClient implements WebsiteClient {
     }
 
     static VerifyResult mapVerifyResponse(int statusCode, String body) {
+        return mapVerifyResponse(statusCode, body, null);
+    }
+
+    static VerifyResult mapVerifyResponse(int statusCode, String body, String retryAfterHeader) {
         return switch (statusCode) {
             case 200 -> parseSuccess(body);
             case 401 -> VerifyResult.unauthorized();
             case 409 -> parseConflict(body);
+            case 429 -> parseRateLimited(body, retryAfterHeader);
             default -> VerifyResult.unreachable();
         };
     }
@@ -159,11 +165,62 @@ public final class HttpWebsiteClient implements WebsiteClient {
                 case "invalid_code" -> VerifyResult.invalidCode();
                 case "expired" -> VerifyResult.expired();
                 case "used" -> VerifyResult.used();
-                case "game_id_mismatch" -> VerifyResult.gameIdMismatch();
+                case "game_id_mismatch" ->
+                        VerifyResult.gameIdMismatch(optionalString(json, "expectedGameId"));
                 default -> VerifyResult.unreachable();
             };
         } catch (RuntimeException e) {
             return VerifyResult.unreachable();
+        }
+    }
+
+    private static VerifyResult parseRateLimited(String body, String retryAfterHeader) {
+        Long retryAfterMs = null;
+        Integer attemptsRemaining = null;
+        try {
+            JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+            retryAfterMs = optionalLong(json, "retryAfterMs");
+            attemptsRemaining = optionalInteger(json, "attemptsRemaining");
+        } catch (RuntimeException ignored) {
+            // 429 本身已经足够表达限流；响应体格式异常时退回通用文案。
+        }
+        if (retryAfterMs == null) {
+            retryAfterMs = parseRetryAfterHeader(retryAfterHeader);
+        }
+        return VerifyResult.rateLimited(retryAfterMs, attemptsRemaining);
+    }
+
+    private static Long optionalLong(JsonObject json, String member) {
+        if (!json.has(member) || json.get(member).isJsonNull()) {
+            return null;
+        }
+        try {
+            return json.get(member).getAsLong();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Integer optionalInteger(JsonObject json, String member) {
+        if (!json.has(member) || json.get(member).isJsonNull()) {
+            return null;
+        }
+        try {
+            return json.get(member).getAsInt();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Long parseRetryAfterHeader(String header) {
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        try {
+            long seconds = Long.parseLong(header.trim());
+            return seconds >= 0 ? seconds * 1000 : null;
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -176,14 +233,6 @@ public final class HttpWebsiteClient implements WebsiteClient {
 
     private URI uri(String path) {
         return URI.create(baseUrl + path);
-    }
-
-    private static String stripTrailingSlash(String url) {
-        int end = url.length();
-        while (end > 0 && url.charAt(end - 1) == '/') {
-            end--;
-        }
-        return url.substring(0, end);
     }
 
     private static String normalizePath(String path) {
