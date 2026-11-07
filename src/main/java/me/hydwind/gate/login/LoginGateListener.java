@@ -79,7 +79,25 @@ public final class LoginGateListener {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
+        // 同名重复登录被代理拒绝时，这个事件携带的是**目标玩家**的 UUID，而不是
+        // 攻击者连接的 UUID。若照常 quit，任何未认证的人都能用别人的名字连接一次
+        // 就清掉对方的会话（PENDING 会被直接删除，玩家永久卡在 limbo）。
+        // 被拒绝的连接从未建立过会话，这里必须忽略。
+        if (!shouldReleaseSession(event.getLoginStatus())) {
+            return;
+        }
         sessionStore.quit(event.getPlayer().getUniqueId(), clock.instant());
+    }
+
+    /**
+     * 该断线事件是否应释放会话。
+     *
+     * <p>{@code CONFLICTING_LOGIN} 表示“同名重复登录被代理拒绝”：事件携带的是
+     * 已在线的目标玩家 UUID，而不是被拒绝连接的 UUID。释放它会让任何未认证的人
+     * 用别人的名字连接一次就清掉对方会话。这个判据是纯函数，便于回归测试。</p>
+     */
+    static boolean shouldReleaseSession(DisconnectEvent.LoginStatus status) {
+        return status != DisconnectEvent.LoginStatus.CONFLICTING_LOGIN;
     }
 
     private void spawnInLimbo(Player player) {

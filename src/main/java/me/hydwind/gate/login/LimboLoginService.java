@@ -127,14 +127,19 @@ public final class LimboLoginService implements LimboResidents {
         residents.remove(uuid, handler);
     }
 
-    /** 按游戏 ID（大小写不敏感）查找仍在 limbo 的玩家。 */
+    /**
+     * 按游戏 ID 精确查找仍在 limbo 的玩家。
+     *
+     * <p>与会话存储使用同一条规则：离线模式下大小写变体是不同账号，
+     * 放宽比较会让管理动作作用到错误的人。</p>
+     */
     @Override
     public Optional<Resident> find(String gameId) {
         if (gameId == null || gameId.isBlank()) {
             return Optional.empty();
         }
         return residents.values().stream()
-                .filter(handler -> handler.gameId().equalsIgnoreCase(gameId))
+                .filter(handler -> handler.gameId().equals(gameId))
                 .map(handler -> new Resident(handler.uuid(), handler.gameId()))
                 .findFirst();
     }

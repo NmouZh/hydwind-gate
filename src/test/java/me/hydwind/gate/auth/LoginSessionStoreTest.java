@@ -350,12 +350,14 @@ class LoginSessionStoreTest {
     }
 
     @Test
-    void findByGameIdIgnoresCaseAndReturnsEmptyWhenMissing() {
+    void findByGameIdMatchesExactlyAndReturnsEmptyWhenMissing() {
         LoginSessionStore store = newStore();
         join(store, PLAYER, "PlayerOne", START);
 
-        assertEquals(PLAYER, store.findByGameId("playerONE").orElseThrow().uuid());
+        // 离线模式的大小写变体是不同账号；放宽比较会让管理员动作落到错误的人身上。
         assertEquals(PLAYER, store.findByGameId("PlayerOne").orElseThrow().uuid());
+        assertTrue(store.findByGameId("playerONE").isEmpty(),
+                "大小写变体不得匹配，否则管理员可能放行到另一个账号");
         assertTrue(store.findByGameId("SomeoneElse").isEmpty());
     }
 
@@ -620,7 +622,7 @@ class LoginSessionStoreTest {
         LoginSession secondBefore = store.find(SECOND).orElseThrow();
 
         LoginSession forced = store
-                .forceAuthenticateByGameId("playerONE", START.plusSeconds(1))
+                .forceAuthenticateByGameId("PlayerOne", START.plusSeconds(1))
                 .orElseThrow();
 
         assertEquals(PLAYER, forced.uuid(), "必须返回被写入的那个会话");
@@ -635,6 +637,8 @@ class LoginSessionStoreTest {
                 "游戏 ID 不匹配的会话必须原样保留，不得被误写");
         assertEquals(LoginSession.Status.PENDING, store.find(SECOND).orElseThrow().status());
 
+        assertTrue(store.forceAuthenticateByGameId("playerONE", START.plusSeconds(2)).isEmpty(),
+                "大小写变体不得命中，已认证会话也不会被重复放行");
         assertTrue(store.forceAuthenticateByGameId("PlayerOne", START.plusSeconds(2)).isEmpty(),
                 "已认证会话返回 empty");
         assertEquals(forced, store.find(PLAYER).orElseThrow(),

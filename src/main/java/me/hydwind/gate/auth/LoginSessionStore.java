@@ -32,6 +32,12 @@ public final class LoginSessionStore {
     private final Map<UUID, VerificationCounter> lastVerificationIds = new HashMap<>();
     /** 校验编号的保留时长：远大于任何登录会话/断线宽限，足够覆盖迟到结果。 */
     private static final Duration VERIFICATION_ID_RETENTION = Duration.ofHours(24);
+    /**
+     * 计数器条目的硬上限，防止未认证玩家用随机用户名刷登录码造成内存耗尽。
+     * 达到上限时先按保留时长回收；仍然超限则整体清空——这只可能让极少数
+     * 在途的迟到结果失效（fail-closed，玩家重试即可），不会放行未认证连接。
+     */
+    private static final int MAX_VERIFICATION_COUNTERS = 100_000;
     private volatile Duration reconnectGrace;
 
     public LoginSessionStore(Duration reconnectGrace) {
@@ -91,6 +97,13 @@ public final class LoginSessionStore {
             return OptionalLong.empty();
         }
         // 编号按 UUID 全局单调递增，不随会话重建而回到 1。
+        if (lastVerificationIds.size() >= MAX_VERIFICATION_COUNTERS) {
+            pruneVerificationCounters(now);
+            if (lastVerificationIds.size() >= MAX_VERIFICATION_COUNTERS) {
+                // 24 小时内出现超过上限的独立用户名：优先保住内存。
+                lastVerificationIds.clear();
+            }
+        }
         long verificationId = lastVerificationIds
                 .compute(uuid, (key, counter) -> counter == null
                         ? new VerificationCounter(1L, now)
@@ -170,6 +183,12 @@ public final class LoginSessionStore {
         if (session.isAuthenticated()) {
             sessions.put(uuid, session.disconnectedAt(now));
         } else {
+            // 未认证会话在断线时直接移除：玩家重连必须重新开始登录。
+            // 但已经因超时被标记的会话保留给 sweep 处理，否则 sweep 扫不到，
+            // 也就不会执行断开（虽然玩家此时通常已经断开）。
+            if (session.status() == LoginSession.Status.TIMED_OUT) {
+                return;
+            }
             sessions.remove(uuid);
         }
     }
@@ -218,9 +237,13 @@ public final class LoginSessionStore {
             }
         }
         // 校验编号只保留有限时长，避免长期运行的代理随独立玩家数无限增长。
+        pruneVerificationCounters(now);
+        return removed;
+    }
+
+    private void pruneVerificationCounters(Instant now) {
         Instant idCutoff = now.minus(VERIFICATION_ID_RETENTION);
         lastVerificationIds.entrySet().removeIf(entry -> entry.getValue().updatedAt().isBefore(idCutoff));
-        return removed;
     }
 
     public synchronized Optional<LoginSession> find(UUID uuid) {
@@ -239,11 +262,18 @@ public final class LoginSessionStore {
         return session != null && session.isAuthenticated();
     }
 
-    /** 按游戏 ID（大小写不敏感）查找会话，供管理员命令使用。 */
+    /**
+     * 按游戏 ID 精确查找会话，供管理员命令使用。
+     *
+     * <p>用精确比较而不是 {@code equalsIgnoreCase}：离线模式的 UUID 由用户名精确派生，
+     * 大小写变体是两个不同账号。{@code equalsIgnoreCase} 会把 Unicode 简单大小写
+     * （例如 {@code ſ} 与 {@code s}）判为相同，让管理员放行到错误的玩家。
+     * 需要便利性时由命令行入口做一次 trim，不在这里放宽。</p>
+     */
     public synchronized Optional<LoginSession> findByGameId(String gameId) {
         Objects.requireNonNull(gameId, "gameId");
         return sessions.values().stream()
-                .filter(session -> session.gameId().equalsIgnoreCase(gameId))
+                .filter(session -> session.gameId().equals(gameId))
                 .findFirst();
     }
 
@@ -266,7 +296,7 @@ public final class LoginSessionStore {
     public synchronized Optional<LoginSession> forceAuthenticateByGameId(String gameId, Instant now) {
         Objects.requireNonNull(gameId, "gameId");
         LoginSession session = sessions.values().stream()
-                .filter(candidate -> candidate.gameId().equalsIgnoreCase(gameId))
+                .filter(candidate -> candidate.gameId().equals(gameId))
                 .findFirst()
                 .orElse(null);
         if (session == null || session.isAuthenticated()) {
