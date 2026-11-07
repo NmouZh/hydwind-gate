@@ -32,6 +32,15 @@ class LoginFeedbackTest {
     }
 
     @Test
+    void successfulVerificationUsesGameIdWhenNicknameAndUsernameAreMissing() {
+        LoginFeedback feedback = LoginFeedback.from(
+                VerifyResult.ok(null, null, null), messages, "Fallback_Player");
+
+        assertTrue(feedback.authenticated());
+        assertEquals(messages.loginSuccess().replace("{name}", "Fallback_Player"), feedback.message());
+    }
+
+    @Test
     void knownFailuresMapToTheirConfiguredMessages() {
         assertFalse(LoginFeedback.from(VerifyResult.invalidCode(), messages, "P").authenticated());
         assertEquals(messages.invalidCode(), LoginFeedback.from(VerifyResult.invalidCode(), messages, "P").message());
