@@ -47,6 +47,9 @@ dependencies {
 
     testImplementation(platform("org.junit:junit-bom:5.14.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    // RestartTrigger 使用 Velocity 的 SLF4J；测试需要 API 与一个简单绑定。
+    testImplementation("org.slf4j:slf4j-api:2.0.19")
+    testRuntimeOnly("org.slf4j:slf4j-simple:2.0.19")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

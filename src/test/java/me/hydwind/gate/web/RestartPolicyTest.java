@@ -76,6 +76,20 @@ class RestartPolicyTest {
         assertTrue(policy.tryAcquire(START.plus(Duration.ofMinutes(10))));
     }
 
+    @Test
+    void reloadDoesNotClearWindowHistoryEvenWhenLimitShrinks() {
+        RestartPolicy policy = new RestartPolicy();
+        assertTrue(policy.tryAcquire(START));
+
+        // /hydwind reload 用新配置更新策略，但已消耗的额度必须保留。
+        policy.reconfigure(settings(Duration.ofMinutes(10), Duration.ofHours(1), 1));
+
+        assertFalse(policy.tryAcquire(START.plus(Duration.ofMinutes(10))),
+                "reload 不应清空窗口内计数");
+        assertTrue(policy.tryAcquire(START.plus(Duration.ofHours(1))),
+                "滚动窗口滑出后新配置的额度应恢复");
+    }
+
     private static RestartSettings settings(Duration cooldown, Duration window, int maxPerWindow) {
         return new RestartSettings(Path.of("/tmp/restart-request"), cooldown, window, maxPerWindow);
     }

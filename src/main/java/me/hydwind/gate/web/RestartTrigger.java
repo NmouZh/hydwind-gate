@@ -8,8 +8,8 @@ import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.logging.Logger;
 import me.hydwind.gate.config.RestartSettings;
+import org.slf4j.Logger;
 
 /**
  * 网站不可达时的受控重启触发。
@@ -44,7 +44,7 @@ public final class RestartTrigger {
         try {
             health = websiteClient.health();
         } catch (RuntimeException exception) {
-            logger.warning("网站健康检查异常，按不可用处理: " + exception);
+            logger.warn("网站健康检查异常，按不可用处理: {}", exception.toString());
             health = HealthResult.unhealthy();
         }
 
@@ -55,8 +55,8 @@ public final class RestartTrigger {
 
         Instant now = clock.instant();
         if (!policy.tryAcquire(now)) {
-            logger.warning("网站不可达，但重启请求被策略拒绝（冷却中或已达到每小时上限）；"
-                    + "请求文件: " + settings.requestFile());
+            logger.warn("网站不可达，但重启请求被策略拒绝（冷却中或已达到每小时上限）；请求文件: {}",
+                    settings.requestFile());
             return;
         }
 
@@ -70,10 +70,11 @@ public final class RestartTrigger {
                     StandardOpenOption.CREATE,
                     StandardOpenOption.WRITE,
                     StandardOpenOption.TRUNCATE_EXISTING);
-            logger.warning("网站不可达，已写入重启请求文件: " + requestFile);
+            logger.warn("网站不可达，已写入重启请求文件: {}", requestFile);
         } catch (IOException | RuntimeException exception) {
             // 文件系统异常、权限不足等只告警；重启额度仍视为已消耗，避免异常路径造成重启风暴。
-            logger.warning("网站不可达，但写入重启请求文件失败: " + requestFile + " (" + exception + ")");
+            logger.warn("网站不可达，但写入重启请求文件失败: {} ({})",
+                    requestFile, exception.toString());
         }
     }
 
