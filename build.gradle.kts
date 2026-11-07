@@ -1,3 +1,4 @@
+import java.io.File
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -22,14 +23,16 @@ repositories {
 val limboApiVersion = "1.2.0"
 val limboApiUrl = "https://github.com/Elytrium/LimboAPI/releases/download/" +
     "$limboApiVersion/limboapi-$limboApiVersion.jar"
-val limboApiJar = layout.buildDirectory.file("limboapi/limboapi-$limboApiVersion.jar")
+val limboApiJarPath = layout.buildDirectory.file("limboapi/limboapi-$limboApiVersion.jar")
+    .get().asFile.absolutePath
 
-val downloadLimboApi by tasks.registering {
+// 只捕获 String；避免 configuration cache 序列化 Gradle 脚本对象。
+val downloadLimboApi = tasks.register("downloadLimboApi") {
     group = "build"
     description = "Downloads LimboAPI $limboApiVersion from GitHub Releases for compileOnly use."
-    outputs.file(limboApiJar)
+    outputs.file(limboApiJarPath)
     doLast {
-        val destination = limboApiJar.get().asFile
+        val destination = File(limboApiJarPath)
         if (destination.isFile && destination.length() > 0L) {
             return@doLast
         }
@@ -61,7 +64,7 @@ dependencies {
     // 生成插件根目录的 velocity-plugin.json。
     annotationProcessor("com.velocitypowered:velocity-api:4.1.2-SNAPSHOT")
 
-    compileOnly(files(limboApiJar))
+    compileOnly(files(limboApiJarPath))
 
     implementation("org.yaml:snakeyaml:2.3")
     implementation("com.google.code.gson:gson:2.14.0")
