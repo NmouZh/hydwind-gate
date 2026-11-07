@@ -3,6 +3,7 @@ package me.hydwind.gate.login;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import me.hydwind.gate.auth.KaomojiCode;
 import org.junit.jupiter.api.Test;
 
 class LoginCommandTest {
@@ -47,10 +48,10 @@ class LoginCommandTest {
     }
 
     @Test
-    void rejectsCodesAboveTheChatSafeLimit() {
+    void rejectsCodesAboveTheWebsiteLimit() {
         assertEquals(LoginCommand.Status.LOGIN,
-                LoginCommand.parse("/login " + "A".repeat(LoginCommand.MAX_CODE_LENGTH)).status());
+                LoginCommand.parse("/login " + "A".repeat(KaomojiCode.MAX_LENGTH)).status());
         assertEquals(LoginCommand.Status.TOO_LONG,
-                LoginCommand.parse("/login " + "A".repeat(LoginCommand.MAX_CODE_LENGTH + 1)).status());
+                LoginCommand.parse("/login " + "A".repeat(KaomojiCode.MAX_LENGTH + 1)).status());
     }
 }

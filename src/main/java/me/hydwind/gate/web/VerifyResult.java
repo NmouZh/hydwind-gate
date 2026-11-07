@@ -17,6 +17,10 @@ public record VerifyResult(
         OK,
         /** 插件令牌错误。 */
         UNAUTHORIZED,
+        /** 网站拒绝了本次请求（HTTP 403）。 */
+        FORBIDDEN,
+        /** 校验接口不存在（HTTP 404），通常是网站配置错误。 */
+        NOT_FOUND,
         /** 登录码不存在。 */
         INVALID_CODE,
         /** 登录码已过期。 */
@@ -43,6 +47,14 @@ public record VerifyResult(
 
     public static VerifyResult unauthorized() {
         return failed(Status.UNAUTHORIZED);
+    }
+
+    public static VerifyResult forbidden() {
+        return failed(Status.FORBIDDEN);
+    }
+
+    public static VerifyResult notFound() {
+        return failed(Status.NOT_FOUND);
     }
 
     public static VerifyResult invalidCode() {

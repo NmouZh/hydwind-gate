@@ -34,17 +34,6 @@ public record PluginConfig(
     public static final String DEFAULT_LIMBO_SPAWN = "0, 64, 0";
     public static final String DEFAULT_MAIN_SERVER = "main";
 
-    /** 兼容测试与最小配置的四参数构造器，其余字段使用默认值。 */
-    public PluginConfig(String websiteBaseUrl,
-                        String pluginToken,
-                        int connectTimeoutMillis,
-                        int readTimeoutMillis) {
-        this(websiteBaseUrl, pluginToken, connectTimeoutMillis, readTimeoutMillis,
-                DEFAULT_HEALTH_PATH, DEFAULT_LOGIN_TIMEOUT, DEFAULT_RECONNECT_GRACE,
-                DEFAULT_PROMPT_INTERVAL, RestartSettings.DEFAULT, DEFAULT_ADMIN_PERMISSION,
-                DEFAULT_LIMBO_WORLD, DEFAULT_LIMBO_SPAWN, DEFAULT_MAIN_SERVER);
-    }
-
     public PluginConfig {
         Objects.requireNonNull(websiteBaseUrl, "websiteBaseUrl");
         Objects.requireNonNull(pluginToken, "pluginToken");

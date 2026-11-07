@@ -82,11 +82,12 @@ jobs:
           unzip -l "$jar_file" | grep -q ' velocity-plugin.json$'
           echo "velocity-plugin.json found in $jar_file"
 
-      - name: Verify LimboAPI compile dependency was downloaded
+      - name: Verify LimboAPI dependency was downloaded and checksummed
         run: |
           set -euo pipefail
           test -s build/limboapi/limboapi-1.2.0.jar
           ls -l build/limboapi/limboapi-1.2.0.jar
+          # `gradle build` 通过 verifyLimboApi 任务完成校验；这里确认文件仍在。
 
       - name: Upload plugin jar
         uses: actions/upload-artifact@v4

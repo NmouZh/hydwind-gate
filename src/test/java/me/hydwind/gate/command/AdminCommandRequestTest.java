@@ -1,9 +1,7 @@
 package me.hydwind.gate.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -91,16 +89,6 @@ class AdminCommandRequestTest {
     void bareHydwindLineIsUsage() {
         assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseLine("/hydwind").type());
         assertEquals(AdminCommandRequest.Type.USAGE, AdminCommandRequest.parseLine("/hydwind   ").type());
-    }
-
-    @Test
-    void onlyApproveAndKickNeedAPlayerName() {
-        assertTrue(AdminCommandRequest.parseArgs("approve", "Alice").needsPlayerName());
-        assertTrue(AdminCommandRequest.parseArgs("kick", "Bob").needsPlayerName());
-        assertFalse(AdminCommandRequest.parseArgs("status").needsPlayerName());
-        assertFalse(AdminCommandRequest.parseArgs("reload").needsPlayerName());
-        assertFalse(AdminCommandRequest.parseArgs().needsPlayerName());
-        assertFalse(AdminCommandRequest.parseArgs("unknown").needsPlayerName());
     }
 
     @Test

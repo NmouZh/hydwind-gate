@@ -65,7 +65,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         this.proxyPlayer = proxyPlayer;
         this.uuid = proxyPlayer.getUniqueId();
         this.gameId = proxyPlayer.getUsername();
-        this.ip = remoteIp(proxyPlayer);
+        this.ip = RemoteAddress.remoteIp(proxyPlayer.getRemoteAddress());
         this.limboService = limboService;
     }
 
@@ -264,6 +264,8 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (!closed.get()) {
             proxyPlayer.sendMessage(Component.text(messages.gateTitle()).color(NamedTextColor.GOLD));
             proxyPlayer.sendMessage(instruction);
+            // 明确告诉玩家当前流程位置，避免只看到网址不知道还要做什么。
+            proxyPlayer.sendMessage(Component.text(messages.statusUnverified()));
         }
     }
 
@@ -282,15 +284,5 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (timeout != null) {
             timeout.cancel(false);
         }
-    }
-
-    private static String remoteIp(Player player) {
-        var address = player.getRemoteAddress();
-        if (address == null) {
-            return "unknown";
-        }
-        return address.getAddress() == null
-                ? address.getHostString()
-                : address.getAddress().getHostAddress();
     }
 }

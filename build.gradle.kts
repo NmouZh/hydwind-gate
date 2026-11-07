@@ -18,6 +18,9 @@ repositories {
 val limboApiVersion = "1.2.0"
 val limboApiUrl = "https://github.com/Elytrium/LimboAPI/releases/download/" +
     "$limboApiVersion/limboapi-$limboApiVersion.jar"
+// GitHub Releases API 为 1.2.0 资产公布的 SHA-256（原字段形式 sha256:<hex>）。
+// 来源：https://api.github.com/repos/Elytrium/LimboAPI/releases/tags/1.2.0
+val limboApiSha256 = "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31"
 val limboApiJarPath = layout.buildDirectory.file("limboapi/limboapi-$limboApiVersion.jar")
     .get().asFile.absolutePath
 
@@ -27,11 +30,26 @@ val limboApiJarPath = layout.buildDirectory.file("limboapi/limboapi-$limboApiVer
 val downloadLimboApi = tasks.register<Exec>("downloadLimboApi") {
     group = "build"
     description = "Downloads LimboAPI $limboApiVersion from GitHub Releases for compileOnly use."
+    inputs.property("sha256", limboApiSha256)
     outputs.file(limboApiJarPath)
     commandLine(
         "curl", "-fsSL", "--retry", "3", "--create-dirs",
         "-A", "hydwind-gate-build",
         "-o", limboApiJarPath, limboApiUrl
+    )
+}
+
+// 不声明 outputs，因此每次构建都会执行；sha256sum 的额外成本可以忽略。
+// 校验失败时构建中止，避免编译到被替换的 jar。
+val verifyLimboApi = tasks.register<Exec>("verifyLimboApi") {
+    group = "build"
+    description = "Verifies the downloaded LimboAPI jar against GitHub's published SHA-256."
+    dependsOn(downloadLimboApi)
+    inputs.property("sha256", limboApiSha256)
+    inputs.file(limboApiJarPath)
+    commandLine(
+        "sh", "-c",
+        "printf '%s  %s\\n' '$limboApiSha256' '$limboApiJarPath' | sha256sum -c -"
     )
 }
 
@@ -64,7 +82,7 @@ tasks.withType<JavaCompile>().configureEach {
     options.release = 25
     // JDK 23+ 不再默认运行注解处理；velocity-plugin.json 依赖它。
     options.compilerArgs.add("-proc:full")
-    dependsOn(downloadLimboApi)
+    dependsOn(verifyLimboApi)
 }
 
 tasks.withType<Test>().configureEach {

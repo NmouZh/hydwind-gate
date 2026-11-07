@@ -10,6 +10,8 @@
 
 - [ ] Java 25（`java -version` 显示 25）。
 - [ ] Velocity 4.1.2+（推荐最新 4.1.x）。
+- [ ] 用低于 4.1.2 的 Velocity 启动：控制台记录明确错误并关闭代理，不会静默继续。
+- [ ] 删除 `limboapi-1.2.0.jar` 后启动：记录「LimboAPI is not loaded」并关闭代理（或由插件依赖直接拒绝加载）。
 - [ ] LimboAPI 1.2.0，与 Velocity 版本配套。
 - [ ] 客户端与后端均为 Minecraft 26.3（协议 777）。
 - [ ] 后端 Paper 26.3 服务器已在 `velocity.toml` 的 `servers` 中，且名称与 `server.main` 一致。
@@ -19,9 +21,11 @@
 gh run list -R NmouZh/hydwind-gate --branch feat/velocity-gate --status success
 gh run download <run-id> -R NmouZh/hydwind-gate -n hydwind-gate
 
-# 下载 LimboAPI 1.2.0
+# 下载 LimboAPI 1.2.0 并校验 Release API 公布的 SHA-256
 curl -fL -o plugins/limboapi-1.2.0.jar \
   https://github.com/Elytrium/LimboAPI/releases/download/1.2.0/limboapi-1.2.0.jar
+echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/limboapi-1.2.0.jar" \
+  | sha256sum -c -
 
 # plugins/ 中应同时存在：
 #   HydwindGate-0.1.0.jar
@@ -42,6 +46,7 @@ curl -fL -o plugins/limboapi-1.2.0.jar \
 - [ ] 以未登录游戏 ID 连接：不被直接踢出，而是进入 limbo 虚拟世界。
 - [ ] 玩家不会掉入虚空（插件调用 `disableFalling`）。
 - [ ] 聊天栏出现「氢风门禁」标题与登录说明。
+- [ ] 标题与网址之后紧跟一行当前状态（默认「当前状态：尚未认证。」）。
 - [ ] 说明中的网站地址可点击；点击后浏览器打开 `website.base-url/gate`。
 - [ ] 每隔 `auth.prompt-interval-seconds`（默认 10 秒）重复提示，直到认证或超时。
 - [ ] 客户端输入 `/login` 时能出现 Tab 补全（仅命令名）。
@@ -66,17 +71,20 @@ curl -fL -o plugins/limboapi-1.2.0.jar \
 
 逐项确认玩家仍在 limbo，且文案准确：
 
-- [ ] `invalid_code`：随机错误码 → 「登录码不存在」。
+- [ ] `invalid_code`：随机错误码 → 「登录码不存在」；文案同时提示「如果没有账号，请到 QQ 群私聊机器人注册 游戏ID」。
 - [ ] `expired`：生成码后等待超过 5 分钟 → 「登录码已过期」。
 - [ ] `used`：同一个码成功一次后再提交 → 「登录码已被使用」。
 - [ ] `game_id_mismatch`：用账号 B 的码在账号 A 的游戏 ID 下提交 → 「网站账号名与你的游戏 ID 不一致」；若网站返回 `expectedGameId`，文案点名该 ID。
 - [ ] `401`：临时填错插件令牌并重载 → 玩家看到「认证服务配置异常」，控制台有 401 告警，不触发重启。
-- [ ] 恢复正确令牌后再次提交有效码：成功。
+- [ ] `403`：网站返回 403 → 玩家看到「网站拒绝了本次登录请求」，不触发健康检查/重启文件。
+- [ ] `404`：网站校验路由缺失 → 玩家看到「登录接口不存在」，不触发重启。
+- [ ] 恢复正确令牌/路径后再次提交有效码：成功。
 
 ## 5. 429 限流
 
 - [ ] 快速连续提交错误码，直到网站返回 429。
 - [ ] 玩家看到「尝试过多，请 X 秒后再试」；X 来自 `retryAfterMs` 或 `Retry-After`。
+- [ ] 响应带 `attemptsRemaining` 时文案追加「剩余 N 次」。
 - [ ] 响应没有重试时间时显示「尝试过多，请稍后再试」。
 - [ ] 限流**不**触发受控重启（`restart.request-path` 不应出现）。
 
@@ -127,11 +135,12 @@ curl -fL -o plugins/limboapi-1.2.0.jar \
 
 - [ ] `/hydwind status`：
   - [ ] Limbo 中玩家数。
+  - [ ] Limbo 中玩家名（最多列出 20 个；更多时显示「等 N 人」）。
   - [ ] 待认证（PENDING/VERIFYING）与已认证（含离线宽限）数量。
   - [ ] 网站健康（`uptime` 秒）或「不可达」。
   - [ ] 重启额度；额度为 0 时显示「下次允许 HH:mm」。
   - [ ] 管理员权限名。
-- [ ] `/hydwind reload`：修改 `auth.prompt-interval-seconds` 或 `messages.gate-title` 后执行，日志出现重载成功；进行中的 limbo 玩家不被打断，`/hydwind status` 的重启额度不被清零。
+- [ ] `/hydwind reload`：修改 `messages.gate-title` 或 `auth.session-grace-seconds` 后执行，日志出现重载成功；进行中的 limbo 玩家不被打断，`/hydwind status` 的重启额度不被清零，断线宽限立即按新值生效。
 - [ ] `/hydwind approve <玩家>`：
   - [ ] 对 limbo 中未认证玩家执行：玩家收到「管理员已手动放行你的登录」，随后转到 `server.main`。
   - [ ] 重复执行：提示「玩家已经通过认证」。
@@ -146,11 +155,12 @@ curl -fL -o plugins/limboapi-1.2.0.jar \
 
 ## 12. 配置消费
 
-- [ ] 修改 `auth.prompt-interval-seconds` 并重载：提示间隔变化。
-- [ ] 修改 `auth.login-timeout-seconds` 并重载：超时时间变化。
+- [ ] 修改 `auth.session-grace-seconds` 并重载：新值立即用于断线重连；在线/已断线的会话都不会丢失。
+- [ ] 修改 `auth.prompt-interval-seconds` 并重载：**仅对之后进入 limbo 的会话生效**；已在 limbo 的玩家保持原提示间隔。
+- [ ] 修改 `auth.login-timeout-seconds` 并重载：**仅对之后进入 limbo 的会话生效**；已在 limbo 的玩家保持原超时定时器。
 - [ ] 修改 `limbo.spawn` 后重启代理：新出生点生效；仅重载时日志提示需要重启。
 - [ ] `server.main` 指向不存在的服务器时登录成功：日志报错且玩家被断开，不会卡在 limbo。
-- [ ] 删除/未安装 `limboapi-1.2.0.jar`：Velocity 因插件依赖拒绝加载并给出明确原因。
+- [ ] 删除/未安装 `limboapi-1.2.0.jar`：Velocity 因插件依赖拒绝加载，或启动检查记录「LimboAPI is not loaded」并关闭代理。
 - [ ] `website.token` 留空且未设置 `HYDWIND_PLUGIN_TOKEN`：启动日志告警，校验返回 401。
 - [ ] `website.base-url` 留空：插件拒绝启用并记录明确错误。
 

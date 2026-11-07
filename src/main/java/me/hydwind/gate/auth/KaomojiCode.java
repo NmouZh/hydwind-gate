@@ -5,7 +5,8 @@ import java.text.Normalizer;
 /** Basic client-side preparation of website-issued login codes. */
 public final class KaomojiCode {
 
-    private static final int MAX_LENGTH = 64;
+    /** 网站登录码的长度上限（按 Unicode code point 计）。聊天输入上限更高，但登录码远低于它。 */
+    public static final int MAX_LENGTH = 64;
 
     private KaomojiCode() {
     }
