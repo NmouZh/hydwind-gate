@@ -2,7 +2,9 @@ package me.hydwind.gate.auth;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -15,10 +17,19 @@ import java.util.UUID;
  */
 public final class LoginSessionStore {
 
-    /** 已认证玩家断线后，同 UUID + 同 IP 免登录的时长。 */
+    /** 已认证玩家断线后，同 UUID + 同 IP 免登录的默认时长。 */
     static final Duration RECONNECT_GRACE = Duration.ofMinutes(5);
 
     private final Map<UUID, LoginSession> sessions = new HashMap<>();
+    private final Duration reconnectGrace;
+
+    public LoginSessionStore() {
+        this(RECONNECT_GRACE);
+    }
+
+    public LoginSessionStore(Duration reconnectGrace) {
+        this.reconnectGrace = Objects.requireNonNull(reconnectGrace, "reconnectGrace");
+    }
 
     /**
      * 玩家进服。已认证且在宽限内的同 UUID + 同 IP 重连直接恢复认证；
@@ -110,6 +121,50 @@ public final class LoginSessionStore {
         }
     }
 
+    /**
+     * 批量处理超时：PENDING / VERIFYING 从进服起超过 {@code limit} 的会话标记为 TIMED_OUT。
+     *
+     * @return 本次被标记为超时的会话
+     */
+    public synchronized List<LoginSession> timeOutAll(Instant now, Duration limit) {
+        Objects.requireNonNull(now, "now");
+        Objects.requireNonNull(limit, "limit");
+        List<LoginSession> timedOut = new ArrayList<>();
+        for (LoginSession session : List.copyOf(sessions.values())) {
+            if (session.status() != LoginSession.Status.PENDING
+                    && session.status() != LoginSession.Status.VERIFYING) {
+                continue;
+            }
+            if (Duration.between(session.enteredAt(), now).compareTo(limit) < 0) {
+                continue;
+            }
+            LoginSession updated = session.transitionTo(LoginSession.Status.TIMED_OUT, now);
+            sessions.put(session.uuid(), updated);
+            timedOut.add(updated);
+        }
+        return timedOut;
+    }
+
+    /**
+     * 清除已超过断线宽限的认证记录。
+     *
+     * @return 被清除的会话数量
+     */
+    public synchronized int expireGrace(Instant now) {
+        Objects.requireNonNull(now, "now");
+        int removed = 0;
+        for (LoginSession session : List.copyOf(sessions.values())) {
+            Instant disconnectedAt = session.disconnectedAt();
+            if (session.isAuthenticated()
+                    && disconnectedAt != null
+                    && !now.isBefore(disconnectedAt.plus(reconnectGrace))) {
+                sessions.remove(session.uuid());
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public synchronized Optional<LoginSession> find(UUID uuid) {
         return Optional.ofNullable(sessions.get(uuid));
     }
@@ -124,6 +179,6 @@ public final class LoginSessionStore {
         return disconnectedAt != null
                 && session.matches(gameId, ip)
                 && !now.isBefore(disconnectedAt)
-                && now.isBefore(disconnectedAt.plus(RECONNECT_GRACE));
+                && now.isBefore(disconnectedAt.plus(reconnectGrace));
     }
 }
