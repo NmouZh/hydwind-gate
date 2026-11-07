@@ -1,6 +1,6 @@
 package me.hydwind.gate.login;
 
-import me.hydwind.gate.auth.KaomojiCode;
+import me.hydwind.gate.auth.LoginCode;
 import me.hydwind.gate.util.CommandLine;
 
 /**
@@ -32,7 +32,7 @@ public record LoginCommand(Status status, String code) {
         if (code.isEmpty()) {
             return new LoginCommand(Status.EMPTY_CODE, null);
         }
-        if (code.codePointCount(0, code.length()) > KaomojiCode.MAX_LENGTH) {
+        if (code.codePointCount(0, code.length()) > LoginCode.MAX_LENGTH) {
             return new LoginCommand(Status.TOO_LONG, null);
         }
         return new LoginCommand(Status.LOGIN, code);

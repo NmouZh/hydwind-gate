@@ -7,38 +7,38 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-class KaomojiCodeTest {
+class LoginCodeTest {
 
     @Test
     void normalizesComposedAndDecomposedCharactersToTheSameCode() {
-        assertEquals("é(・ω・)", KaomojiCode.normalize("é(・ω・)"));
+        assertEquals("é(・ω・)", LoginCode.normalize("é(・ω・)"));
     }
 
     @Test
     void removesSurroundingWhitespaceWithoutChangingTheCodeInside() {
-        assertEquals("(・ω・) (´▽｀)", KaomojiCode.normalize("  (・ω・) (´▽｀)  "));
+        assertEquals("(・ω・) (´▽｀)", LoginCode.normalize("  (・ω・) (´▽｀)  "));
     }
 
     @Test
     void foldsAsciiCaseInFallbackCodes() {
-        assertEquals("HWG-AB2C", KaomojiCode.normalize("hwg-aB2c"));
+        assertEquals("HWG-AB2C", LoginCode.normalize("hwg-aB2c"));
     }
 
     @Test
     void rejectsBlankCodes() {
-        assertTrue(KaomojiCode.isBlankOrTooLong(""));
-        assertTrue(KaomojiCode.isBlankOrTooLong("  \t  "));
+        assertTrue(LoginCode.isBlankOrTooLong(""));
+        assertTrue(LoginCode.isBlankOrTooLong("  \t  "));
     }
 
     @Test
     void treatsMissingCodeAsAbsent() {
-        assertNull(KaomojiCode.normalize(null));
-        assertTrue(KaomojiCode.isBlankOrTooLong(null));
+        assertNull(LoginCode.normalize(null));
+        assertTrue(LoginCode.isBlankOrTooLong(null));
     }
 
     @Test
     void rejectsCodesLongerThanSixtyFourCharacters() {
-        assertFalse(KaomojiCode.isBlankOrTooLong("A".repeat(64)));
-        assertTrue(KaomojiCode.isBlankOrTooLong("A".repeat(65)));
+        assertFalse(LoginCode.isBlankOrTooLong("A".repeat(64)));
+        assertTrue(LoginCode.isBlankOrTooLong("A".repeat(65)));
     }
 }
