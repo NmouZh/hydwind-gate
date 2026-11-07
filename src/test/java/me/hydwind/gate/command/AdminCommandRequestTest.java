@@ -67,10 +67,10 @@ class AdminCommandRequestTest {
 
     @Test
     void parseLineOnlyReactsToHydwind() {
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("/login ABC"));
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("hello there"));
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine(""));
-        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine(null));
+        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("/login ABC").type());
+        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("hello there").type());
+        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine("").type());
+        assertEquals(AdminCommandRequest.Type.NONE, AdminCommandRequest.parseLine(null).type());
     }
 
     @Test
