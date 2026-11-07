@@ -1,5 +1,8 @@
 # HydwindGate 手工验证清单
 
+> **Superseded** — 本清单针对已删除的 Paper 实现，保留仅作历史参考。
+> Velocity + LimboAPI 的新清单会在 V2 完成后补充。
+
 本清单覆盖无法在 JUnit 中验证的游戏内行为。全部手工项在 Paper 26.3 测试服上执行，**不在 CI 中运行**。
 
 ## 0. 准备
