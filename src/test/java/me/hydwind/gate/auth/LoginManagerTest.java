@@ -110,6 +110,84 @@ class LoginManagerTest {
         assertEquals(List.of(PLAYER), gateway.unfrozen);
     }
 
+    @Test
+    void adminRoleUsesItsOwnSuccessMessage() {
+        manager.handleJoin(PLAYER, GAME_ID, IP);
+        website.next = VerifyResult.ok(GAME_ID, "", "admin");
+
+        manager.submitCode(PLAYER, "code");
+
+        assertEquals(List.of(messages.loginSuccessAdmin().replace("{name}", GAME_ID)),
+                gateway.messages);
+    }
+
+    @Test
+    void submissionNormalizesAsciiFallbackCaseBeforeSending() {
+        manager.handleJoin(PLAYER, GAME_ID, IP);
+        website.next = VerifyResult.ok(GAME_ID, "小风", "player");
+
+        manager.submitCode(PLAYER, "  hwg-aB2c  ");
+
+        assertEquals("HWG-AB2C", website.lastCode);
+        assertEquals(1, website.verifyCalls);
+    }
+
+    @Test
+    void tooLongCodeIsRejectedWithoutCallingWebsite() {
+        manager.handleJoin(PLAYER, GAME_ID, IP);
+
+        manager.submitCode(PLAYER, "A".repeat(65));
+
+        assertEquals(0, website.verifyCalls);
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+        assertEquals(List.of(messages.codeTooLong()), gateway.messages);
+    }
+
+    @Test
+    void gameIdMismatchWithExpectedIdNamesTheExpectedGameId() {
+        manager.handleJoin(PLAYER, GAME_ID, IP);
+        gateway.dialogsShown.clear();
+        website.next = VerifyResult.gameIdMismatch("Right_Player");
+
+        manager.submitCode(PLAYER, "code");
+
+        assertEquals(List.of(messages.gameIdMismatchExpected()
+                .replace("{expectedGameId}", "Right_Player")), gateway.messages);
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+        assertEquals(List.of(PLAYER), gateway.dialogsShown);
+    }
+
+    @Test
+    void rateLimitShowsRetryAfterAndDoesNotTriggerUnreachableCallback() {
+        List<UUID> unreachable = new ArrayList<>();
+        LoginManager withCallback = new LoginManager(website, store, gateway, messages,
+                LOGIN_TIMEOUT, clock, Runnable::run, unreachable::add);
+        withCallback.handleJoin(PLAYER, GAME_ID, IP);
+        gateway.dialogsShown.clear();
+        website.next = VerifyResult.rateLimited(45000L, 0);
+
+        withCallback.submitCode(PLAYER, "code");
+
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+        assertEquals(List.of(messages.rateLimited().replace("{seconds}", "45")), gateway.messages);
+        assertEquals(List.of(PLAYER), gateway.dialogsShown);
+        assertTrue(unreachable.isEmpty(), "rate limiting must not trigger the unreachable callback");
+        assertEquals(0, website.healthCalls, "rate limiting must not probe the website");
+    }
+
+    @Test
+    void rateLimitWithoutRetryAfterUsesGenericMessage() {
+        manager.handleJoin(PLAYER, GAME_ID, IP);
+        gateway.dialogsShown.clear();
+        website.next = VerifyResult.rateLimited(null, null);
+
+        manager.submitCode(PLAYER, "code");
+
+        assertEquals(List.of(messages.rateLimitedNoRetry()), gateway.messages);
+        assertEquals(Status.PENDING, store.find(PLAYER).orElseThrow().status());
+        assertEquals(List.of(PLAYER), gateway.dialogsShown);
+    }
+
     static Stream<Arguments> rejectedCodes() {
         Messages messages = Messages.defaults();
         return Stream.of(
@@ -271,6 +349,7 @@ class LoginManagerTest {
 
         private VerifyResult next = VerifyResult.unreachable();
         private int verifyCalls;
+        private int healthCalls;
         private String lastCode;
         private String lastGameId;
         private UUID lastUuid;
@@ -286,6 +365,7 @@ class LoginManagerTest {
 
         @Override
         public HealthResult health() {
+            healthCalls++;
             return HealthResult.unhealthy();
         }
     }

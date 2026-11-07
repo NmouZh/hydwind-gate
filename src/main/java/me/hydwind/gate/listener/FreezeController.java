@@ -4,15 +4,16 @@ import io.papermc.paper.event.player.AsyncChatEvent;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import me.hydwind.gate.config.PluginConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -40,16 +41,22 @@ import org.bukkit.plugin.Plugin;
  */
 public final class FreezeController implements Listener {
 
-    /** 冻结期间允许使用的命令，避免玩家连 /login 都被拦下。 */
-    private static final Set<String> ALLOWED_COMMANDS = Set.of("login", "hydwind");
-
     private final Plugin plugin;
     private final Supplier<Location> spawnSupplier;
+    private final Supplier<String> adminPermissionSupplier;
     private final Map<UUID, FrozenState> frozen = new ConcurrentHashMap<>();
 
     public FreezeController(Plugin plugin, Supplier<Location> spawnSupplier) {
+        this(plugin, spawnSupplier, () -> PluginConfig.DEFAULT_ADMIN_PERMISSION);
+    }
+
+    public FreezeController(Plugin plugin,
+                            Supplier<Location> spawnSupplier,
+                            Supplier<String> adminPermissionSupplier) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.spawnSupplier = Objects.requireNonNull(spawnSupplier, "spawnSupplier");
+        this.adminPermissionSupplier =
+                Objects.requireNonNull(adminPermissionSupplier, "adminPermissionSupplier");
     }
 
     public boolean isFrozen(UUID uuid) {
@@ -127,9 +134,7 @@ public final class FreezeController implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onChat(AsyncChatEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
@@ -137,91 +142,86 @@ public final class FreezeController implements Listener {
         if (!isFrozen(event.getPlayer().getUniqueId())) {
             return;
         }
-        if (!ALLOWED_COMMANDS.contains(commandLabel(event.getMessage()))) {
+        boolean canUseAdmin = event.getPlayer().hasPermission(adminPermissionSupplier.get());
+        if (!isCommandAllowed(event.getMessage(), canUseAdmin)) {
             event.setCancelled(true);
         }
+    }
+
+    /**
+     * 冻结期间无条件放行 {@code /login}；{@code /hydwind} 仅在玩家有管理权限时放行；
+     * 其余命令一律取消。
+     */
+    static boolean isCommandAllowed(String message, boolean canUseAdmin) {
+        String label = commandLabel(message);
+        if ("login".equals(label)) {
+            return true;
+        }
+        return "hydwind".equals(label) && canUseAdmin;
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteract(PlayerInteractEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteractEntity(PlayerInteractEntityEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteractAtEntity(PlayerInteractAtEntityEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDropItem(PlayerDropItemEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPickup(EntityPickupItemEvent event) {
-        if (isFrozen(event.getEntity().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getEntity().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDamage(EntityDamageEvent event) {
-        if (isFrozen(event.getEntity().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getEntity().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDamageByFrozen(EntityDamageByEntityEvent event) {
-        if (isFrozen(event.getDamager().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getDamager().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockBreak(BlockBreakEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockPlace(BlockPlaceEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSwapHands(PlayerSwapHandItemsEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onConsume(PlayerItemConsumeEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
-            event.setCancelled(true);
-        }
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
-        if (isFrozen(event.getPlayer().getUniqueId())) {
+        cancelIfFrozen(event.getPlayer().getUniqueId(), event);
+    }
+
+    private void cancelIfFrozen(UUID uuid, Cancellable event) {
+        if (isFrozen(uuid)) {
             event.setCancelled(true);
         }
     }

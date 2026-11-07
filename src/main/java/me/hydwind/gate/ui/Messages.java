@@ -23,7 +23,13 @@ public record Messages(
         String gameIdMismatch,
         String emptyCode,
         String verifying,
-        String alreadyAuthenticated
+        String alreadyAuthenticated,
+        String loginSuccessAdmin,
+        String gameIdMismatchExpected,
+        String codeTooLong,
+        String rateLimited,
+        String rateLimitedNoRetry,
+        AdminMessages admin
 ) {
 
     private static final String DEFAULT_GATE_TITLE = "氢风门禁";
@@ -33,7 +39,7 @@ public record Messages(
     private static final String DEFAULT_SUBMIT_BUTTON = "提交验证";
     private static final String DEFAULT_SUBMIT_TOOLTIP = "提交对话框中的登录码或备用码";
     private static final String DEFAULT_REOPEN_BUTTON = "重新打开网站";
-    private static final String DEFAULT_REOPEN_TOOLTIP = "重新打开登录对话框";
+    private static final String DEFAULT_REOPEN_TOOLTIP = "在浏览器中打开登录网站";
     private static final String DEFAULT_LOGIN_SUCCESS = "登录成功，欢迎回来，{name}！(๑•̀ㅂ•́)و✧";
     private static final String DEFAULT_SERVICE_UNAVAILABLE = "认证服务暂时不可用，请稍后重试。";
     private static final String DEFAULT_SERVICE_MISCONFIGURED = "认证服务配置异常，请联系管理员。";
@@ -45,6 +51,12 @@ public record Messages(
     private static final String DEFAULT_EMPTY_CODE = "请先填写登录码，或使用 /login <登录码>。";
     private static final String DEFAULT_VERIFYING = "正在验证登录码，请稍候…";
     private static final String DEFAULT_ALREADY_AUTHENTICATED = "你已经完成认证，可以直接游戏。";
+    private static final String DEFAULT_LOGIN_SUCCESS_ADMIN = "管理员 {name} 登录成功，欢迎回来！";
+    private static final String DEFAULT_GAME_ID_MISMATCH_EXPECTED =
+            "此账号对应游戏 ID 为 {expectedGameId}，请使用该游戏 ID 对应的账号登录。";
+    private static final String DEFAULT_CODE_TOO_LONG = "登录码过长，请检查后重新输入。";
+    private static final String DEFAULT_RATE_LIMITED = "尝试过多，请 {seconds} 秒后再试。";
+    private static final String DEFAULT_RATE_LIMITED_NO_RETRY = "尝试过多，请稍后再试。";
 
     /** 默认文案，供测试与未加载配置的场景使用。 */
     public static Messages defaults() {
@@ -66,7 +78,13 @@ public record Messages(
                 DEFAULT_GAME_ID_MISMATCH,
                 DEFAULT_EMPTY_CODE,
                 DEFAULT_VERIFYING,
-                DEFAULT_ALREADY_AUTHENTICATED
+                DEFAULT_ALREADY_AUTHENTICATED,
+                DEFAULT_LOGIN_SUCCESS_ADMIN,
+                DEFAULT_GAME_ID_MISMATCH_EXPECTED,
+                DEFAULT_CODE_TOO_LONG,
+                DEFAULT_RATE_LIMITED,
+                DEFAULT_RATE_LIMITED_NO_RETRY,
+                AdminMessages.defaults()
         );
     }
 
@@ -90,7 +108,13 @@ public record Messages(
                 config.getString("messages.game-id-mismatch", defaults.gameIdMismatch()),
                 config.getString("messages.empty-code", defaults.emptyCode()),
                 config.getString("messages.verifying", defaults.verifying()),
-                config.getString("messages.already-authenticated", defaults.alreadyAuthenticated())
+                config.getString("messages.already-authenticated", defaults.alreadyAuthenticated()),
+                config.getString("messages.login-success-admin", defaults.loginSuccessAdmin()),
+                config.getString("messages.game-id-mismatch-expected", defaults.gameIdMismatchExpected()),
+                config.getString("messages.code-too-long", defaults.codeTooLong()),
+                config.getString("messages.rate-limited", defaults.rateLimited()),
+                config.getString("messages.rate-limited-no-retry", defaults.rateLimitedNoRetry()),
+                AdminMessages.from(config)
         );
     }
 }

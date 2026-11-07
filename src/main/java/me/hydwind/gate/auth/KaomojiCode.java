@@ -29,10 +29,4 @@ public final class KaomojiCode {
         String normalized = normalize(code);
         return normalized == null || normalized.isBlank() || normalized.codePointCount(0, normalized.length()) > MAX_LENGTH;
     }
-
-    /** Indicates whether a code has the shape of a website-issued ASCII fallback code. */
-    public static boolean looksLikeFallback(String code) {
-        String normalized = normalize(code);
-        return normalized != null && normalized.matches("HWG-[A-Z0-9]{4}");
-    }
 }

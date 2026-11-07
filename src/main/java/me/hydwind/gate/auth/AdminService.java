@@ -3,6 +3,7 @@ package me.hydwind.gate.auth;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
+import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.ui.PlayerGateway;
 import me.hydwind.gate.web.HealthResult;
 import me.hydwind.gate.web.RestartPolicy;
@@ -44,17 +45,20 @@ public final class AdminService {
     private final WebsiteClient websiteClient;
     private final RestartPolicy restartPolicy;
     private final Clock clock;
+    private final Messages messages;
 
     public AdminService(LoginSessionStore sessionStore,
                         PlayerGateway playerGateway,
                         WebsiteClient websiteClient,
                         RestartPolicy restartPolicy,
-                        Clock clock) {
+                        Clock clock,
+                        Messages messages) {
         this.sessionStore = sessionStore;
         this.playerGateway = playerGateway;
         this.websiteClient = websiteClient;
         this.restartPolicy = restartPolicy;
         this.clock = clock;
+        this.messages = messages;
     }
 
     public Status status() {
@@ -83,26 +87,31 @@ public final class AdminService {
     public Result approve(String gameId) {
         LoginSession session = sessionStore.findByGameId(gameId).orElse(null);
         if (session == null) {
-            return new Result(Outcome.NOT_FOUND, "没有找到玩家 " + gameId + " 的登录会话。");
+            return new Result(Outcome.NOT_FOUND, render(messages.admin().sessionNotFound(), gameId));
         }
         if (session.isAuthenticated()) {
-            return new Result(Outcome.ALREADY_AUTHENTICATED, "玩家 " + session.gameId() + " 已经通过认证。");
+            return new Result(Outcome.ALREADY_AUTHENTICATED,
+                    render(messages.admin().alreadyAuthenticated(), session.gameId()));
         }
         if (!sessionStore.forceAuthenticate(session.uuid(), clock.instant())) {
-            return new Result(Outcome.NOT_FOUND, "没有找到玩家 " + gameId + " 的登录会话。");
+            return new Result(Outcome.NOT_FOUND, render(messages.admin().sessionNotFound(), gameId));
         }
-        playerGateway.sendMessage(session.uuid(), "管理员已手动放行你的登录。");
+        playerGateway.sendMessage(session.uuid(), messages.admin().approvedPlayer());
         playerGateway.unfreeze(session.uuid());
-        return new Result(Outcome.OK, "已放行玩家 " + session.gameId() + "。");
+        return new Result(Outcome.OK, render(messages.admin().approved(), session.gameId()));
     }
 
     public Result kick(String gameId) {
         LoginSession session = sessionStore.findByGameId(gameId).orElse(null);
         if (session == null) {
-            return new Result(Outcome.NOT_FOUND, "没有找到玩家 " + gameId + " 的登录会话。");
+            return new Result(Outcome.NOT_FOUND, render(messages.admin().sessionNotFound(), gameId));
         }
         sessionStore.remove(session.uuid());
-        playerGateway.kick(session.uuid(), "你已被管理员踢出服务器。");
-        return new Result(Outcome.OK, "已踢出玩家 " + session.gameId() + " 并清理会话。");
+        playerGateway.kick(session.uuid(), messages.admin().kickedPlayer());
+        return new Result(Outcome.OK, render(messages.admin().kicked(), session.gameId()));
+    }
+
+    private static String render(String template, String player) {
+        return template.replace("{player}", player);
     }
 }

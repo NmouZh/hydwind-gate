@@ -93,6 +93,58 @@ class HttpWebsiteClientTest {
     }
 
     @Test
+    void conflictCarriesExpectedGameIdWhenPresent() {
+        server.createContext("/api/plugin/login/verify", exchange -> respond(exchange, 409,
+                "{\"ok\":false,\"reason\":\"game_id_mismatch\",\"expectedGameId\":\"Right_Player\"}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.GAME_ID_MISMATCH, result.status());
+        assertEquals("Right_Player", result.expectedGameId());
+    }
+
+    @Test
+    void missingExpectedGameIdLeavesFieldNull() {
+        server.createContext("/api/plugin/login/verify",
+                exchange -> respond(exchange, 409, "{\"ok\":false,\"reason\":\"game_id_mismatch\"}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.GAME_ID_MISMATCH, result.status());
+        assertEquals(null, result.expectedGameId());
+    }
+
+    @Test
+    void mapsRateLimitWithRetryAfterAndAttemptsRemainingFromBody() {
+        server.createContext("/api/plugin/login/verify", exchange -> respond(exchange, 429,
+                "{\"ok\":false,\"reason\":\"rate_limited\",\"retryAfterMs\":30000,\"attemptsRemaining\":0}"));
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.RATE_LIMITED, result.status());
+        assertEquals(30000L, result.retryAfterMs());
+        assertEquals(0, result.attemptsRemaining());
+    }
+
+    @Test
+    void fallsBackToRetryAfterHeaderWhenBodyOmitsIt() {
+        server.createContext("/api/plugin/login/verify", exchange -> {
+            exchange.getResponseHeaders().set("Retry-After", "12");
+            respond(exchange, 429, "{\"ok\":false,\"reason\":\"rate_limited\"}");
+        });
+
+        VerifyResult result = client(300, 300)
+                .verify("code", "Player_1", UUID.randomUUID());
+
+        assertEquals(VerifyResult.Status.RATE_LIMITED, result.status());
+        assertEquals(12000L, result.retryAfterMs());
+        assertEquals(null, result.attemptsRemaining());
+    }
+
+    @Test
     void reportsUnreachableWhenVerifyTimesOut() {
         server.createContext("/api/plugin/login/verify", exchange -> {
             sleepQuietly(1500);
