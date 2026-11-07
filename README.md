@@ -12,12 +12,15 @@
 
 ## 状态
 
-当前是 **V1（工程骨架与核心移植）**：
+当前是 **V2（limbo 登录流程与 `/login`）**：
 
 - 已从 Paper 插件迁移为单个 Velocity 插件；Paper/Bukkit 依赖与对话框、冻结相关代码已删除。
 - 已移植 `WebsiteClient` / `HttpWebsiteClient`、`KaomojiCode`、`LoginSessionStore`、`RestartPolicy`、`RestartTrigger`、`PluginConfig` 与 `Messages`。
 - `config.yml` 由 SnakeYAML 读取，SnakeYAML 与 Gson 通过 Shadow 打进插件 jar。
-- limbo 登录流程（V2）与管理命令（V3）尚未实现；插件目前只加载配置并装配组件。
+- `PreLoginEvent` 强制离线模式；`LoginLimboRegisterEvent` 决定宽限放行或进入 LimboAPI 虚拟 limbo。
+- limbo 内发送可点击网站链接与说明，按 `auth.prompt-interval-seconds` 重复；`onChat` 解析 `/login <码>`，成功后转 `server.main`，失败按网站 reason 提示，5 分钟未登录踢出。
+- `ServerPreConnectEvent` 拒绝未认证玩家连接任何后端；断线保留 5 分钟 UUID + IP 宽限。
+- 管理命令（V3）尚未实现。
 
 ## 构建
 
@@ -89,4 +92,7 @@ admin:
 
 ## 命令
 
-V1 尚未注册命令。limbo 中的 `/login <码>` 与 `/hydwind status|reload|approve|kick` 分别在 V2、V3 实现。
+- `/login <登录码>`：在 limbo 中完成认证。命令由 LimboAPI 吞掉并交给 `onChat` 解析，不经过 Velocity `CommandManager`；`/login` 注册为 limbo 命令仅为客户端 Tab 补全。
+- `/hydwind status|reload|approve|kick`：V3 实现。
+
+完整的手工验收项见 [docs/manual-test.md](docs/manual-test.md)。
