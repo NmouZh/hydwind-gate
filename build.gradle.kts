@@ -1,8 +1,3 @@
-import java.io.File
-import java.net.URI
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-
 plugins {
     java
     // 把 SnakeYAML 与 Gson 打进插件 jar；不依赖代理服或 LimboAPI 提供这些类。
@@ -27,36 +22,17 @@ val limboApiJarPath = layout.buildDirectory.file("limboapi/limboapi-$limboApiVer
     .get().asFile.absolutePath
 
 // 只捕获 String；避免 configuration cache 序列化 Gradle 脚本对象。
-val downloadLimboApi = tasks.register("downloadLimboApi") {
+// 用内置 Exec 而不是 doLast 闭包：Kotlin DSL 的脚本闭包会被 Configuration
+// Cache 视为脚本对象引用而拒绝序列化。
+val downloadLimboApi = tasks.register<Exec>("downloadLimboApi") {
     group = "build"
     description = "Downloads LimboAPI $limboApiVersion from GitHub Releases for compileOnly use."
     outputs.file(limboApiJarPath)
-    doLast {
-        val destination = File(limboApiJarPath)
-        if (destination.isFile && destination.length() > 0L) {
-            return@doLast
-        }
-        destination.parentFile.mkdirs()
-
-        val partial = destination.toPath().resolveSibling(destination.name + ".part").toFile()
-        val connection = URI(limboApiUrl).toURL().openConnection().apply {
-            connectTimeout = 30_000
-            readTimeout = 60_000
-            setRequestProperty("User-Agent", "hydwind-gate-build")
-        }
-        connection.getInputStream().use { input ->
-            partial.outputStream().use { output -> input.copyTo(output) }
-        }
-        if (partial.length() == 0L) {
-            partial.delete()
-            throw GradleException("Downloaded LimboAPI jar is empty: $limboApiUrl")
-        }
-        Files.move(
-            partial.toPath(),
-            destination.toPath(),
-            StandardCopyOption.REPLACE_EXISTING
-        )
-    }
+    commandLine(
+        "curl", "-fsSL", "--retry", "3", "--create-dirs",
+        "-A", "hydwind-gate-build",
+        "-o", limboApiJarPath, limboApiUrl
+    )
 }
 
 dependencies {
