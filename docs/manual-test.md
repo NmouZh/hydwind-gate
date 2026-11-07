@@ -11,7 +11,7 @@
 - [ ] Java 25（`java -version` 显示 25）。
 - [ ] Velocity 4.1.2+（推荐最新 4.1.x）。
 - [ ] 用低于 4.1.2 的 Velocity 启动：控制台记录明确错误并关闭代理，不会静默继续。
-- [ ] 删除 `limboapi-1.2.0.jar` 后启动：记录「LimboAPI is not loaded」并关闭代理（或由插件依赖直接拒绝加载）。
+- [ ] 删除 `limboapi-1.2.0.jar` 后启动：记录「LimboAPI 未加载」并关闭代理（或由插件依赖直接拒绝加载）。
 - [ ] LimboAPI 1.2.0，与 Velocity 版本配套。
 - [ ] 客户端与后端均为 Minecraft 26.3（协议 777）。
 - [ ] 后端 Paper 26.3 服务器已在 `velocity.toml` 的 `servers` 中，且名称与 `server.main` 一致。
@@ -160,7 +160,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - [ ] 修改 `auth.login-timeout-seconds` 并重载：**仅对之后进入 limbo 的会话生效**；已在 limbo 的玩家保持原超时定时器。
 - [ ] 修改 `limbo.spawn` 后重启代理：新出生点生效；仅重载时日志提示需要重启。
 - [ ] `server.main` 指向不存在的服务器时登录成功：日志报错且玩家被断开，不会卡在 limbo。
-- [ ] 删除/未安装 `limboapi-1.2.0.jar`：Velocity 因插件依赖拒绝加载，或启动检查记录「LimboAPI is not loaded」并关闭代理。
+- [ ] 删除/未安装 `limboapi-1.2.0.jar`：Velocity 因插件依赖拒绝加载，或启动检查记录「LimboAPI 未加载」并关闭代理。
 - [ ] `website.token` 留空且未设置 `HYDWIND_PLUGIN_TOKEN`：启动日志告警，校验返回 401。
 - [ ] `website.base-url` 留空：插件拒绝启用并记录明确错误。
 

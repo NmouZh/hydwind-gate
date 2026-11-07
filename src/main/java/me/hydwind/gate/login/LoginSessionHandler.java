@@ -180,7 +180,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         try {
             result = plugin.websiteClient().verify(code, gameId, uuid);
         } catch (RuntimeException exception) {
-            logger.warn("Website verification threw for player {}: {}", gameId, exception.toString());
+            logger.warn("玩家 {} 的网站校验抛出异常：{}", gameId, exception.toString());
             result = VerifyResult.unreachable();
         }
 
@@ -206,7 +206,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     private void failAuthentication(VerifyResult result, LoginFeedback feedback) {
         sessionStore.authenticationFailed(uuid, clock.instant());
         if (result.status() == VerifyResult.Status.UNAUTHORIZED) {
-            logger.warn("Website rejected the plugin token (401); check website.token / {}.",
+            logger.warn("网站拒绝了插件令牌（401）；请检查 website.token / {}。",
                     PluginConfig.TOKEN_ENV);
         }
         send(feedback.message());
@@ -220,8 +220,8 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         String mainServer = plugin.pluginConfig().mainServer();
         Optional<RegisteredServer> target = server.getServer(mainServer);
         if (target.isEmpty()) {
-            logger.error("Configured main server '{}' was not found in velocity.toml; "
-                    + "authenticated player {} cannot be transferred.", mainServer, gameId);
+            logger.error("配置的主服 '{}' 在 velocity.toml 中不存在；"
+                    + "已认证玩家 {} 无法转服。", mainServer, gameId);
             proxyPlayer.disconnect(Component.text(plugin.messages().serviceMisconfigured()));
             return;
         }

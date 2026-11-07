@@ -65,7 +65,7 @@ public final class AdminCommandExecutor {
             try {
                 health = plugin.websiteClient().health();
             } catch (RuntimeException exception) {
-                plugin.logger().warn("Health probe failed during /hydwind status: {}",
+                plugin.logger().warn("/hydwind status 执行期间健康检查失败：{}",
                         exception.toString());
                 health = HealthResult.unhealthy();
             }
@@ -92,7 +92,7 @@ public final class AdminCommandExecutor {
                 plugin.reloadConfiguration();
                 send(source, admin.reloaded());
             } catch (RuntimeException exception) {
-                plugin.logger().error("Configuration reload failed.", exception);
+                plugin.logger().error("配置重载失败。", exception);
                 send(source, Templates.fill(admin.reloadFailed(), "error",
                         exception.getMessage() == null ? exception.getClass().getSimpleName()
                                 : exception.getMessage()));

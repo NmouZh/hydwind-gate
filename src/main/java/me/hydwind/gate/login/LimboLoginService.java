@@ -63,7 +63,7 @@ public final class LimboLoginService {
                 // 仅用于客户端 Tab 补全；真正的解析发生在 onChat。
                 .registerCommand(new LimboCommandMeta(List.of("login")));
 
-        logger.info("Limbo '{}' created at ({}, {}, {}).",
+        logger.info("已创建 Limbo '{}'，坐标 ({}, {}, {})。",
                 config.limboWorld(), spawn.x(), spawn.y(), spawn.z());
     }
 
@@ -75,7 +75,7 @@ public final class LimboLoginService {
     /** 把玩家放进 limbo；无论调用线程为何，LimboAPI 会切回玩家事件循环。 */
     public void spawnInLimbo(Player player) {
         if (limbo == null || factory == null) {
-            throw new IllegalStateException("Limbo is not initialized");
+            throw new IllegalStateException("Limbo 尚未初始化");
         }
         limbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this));
     }
@@ -152,10 +152,10 @@ public final class LimboLoginService {
         Object instance = server.getPluginManager().getPlugin("limboapi")
                 .flatMap(PluginContainer::getInstance)
                 .orElseThrow(() -> new IllegalStateException(
-                        "LimboAPI is not loaded; install limboapi-1.2.0.jar in the proxy plugins directory"));
+                        "LimboAPI 未加载；请把 limboapi-1.2.0.jar 安装到代理的 plugins 目录"));
         if (!(instance instanceof LimboFactory limboFactory)) {
             throw new IllegalStateException(
-                    "limboapi plugin did not expose a LimboFactory (got " + instance.getClass().getName() + ")");
+                    "limboapi 插件未暴露 LimboFactory（实际为 " + instance.getClass().getName() + "）");
         }
         return limboFactory;
     }

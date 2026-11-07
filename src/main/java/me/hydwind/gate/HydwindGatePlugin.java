@@ -96,7 +96,7 @@ public final class HydwindGatePlugin {
             limboLoginService.initialize();
         } catch (RuntimeException exception) {
             // 没有 limbo 就无法拦截未认证玩家；宁可关闭代理也不放行。
-            logger.error("Failed to initialize the limbo login gate; shutting the proxy down.", exception);
+            logger.error("初始化 limbo 登录门禁失败，正在关闭代理。", exception);
             server.shutdown();
             return;
         }
@@ -116,9 +116,9 @@ public final class HydwindGatePlugin {
                 .repeat(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
                 .schedule();
 
-        logger.info("HydwindGate {} enabled (main server: {}, limbo world: {}).",
+        logger.info("HydwindGate {} 已启用（主服：{}，limbo 世界：{}）。",
                 VERSION, pluginConfig.mainServer(), pluginConfig.limboWorld());
-        logger.info("Website: {}, health path: {}, restart request: {}.",
+        logger.info("网站：{}，健康检查路径：{}，重启请求文件：{}。",
                 pluginConfig.websiteBaseUrl(), pluginConfig.healthPath(),
                 pluginConfig.restart().requestFile());
     }
@@ -132,7 +132,7 @@ public final class HydwindGatePlugin {
         if (limboLoginService != null) {
             limboLoginService.shutdown();
         }
-        logger.info("HydwindGate disabled.");
+        logger.info("HydwindGate 已停用。");
     }
 
     /**
@@ -147,16 +147,16 @@ public final class HydwindGatePlugin {
         String previousLimbo = limboKey(pluginConfig);
         loadConfiguration();
         if (previousLimbo != null && !previousLimbo.equals(limboKey(pluginConfig))) {
-            logger.warn("limbo.world or limbo.spawn changed; restart the proxy to apply them "
-                    + "(the current limbo and its players are kept).");
+            logger.warn("limbo.world 或 limbo.spawn 已变更；需重启代理后生效"
+                    + "（当前 limbo 及其中的玩家会保留）。");
         }
-        logger.info("Configuration reloaded; active login sessions were preserved.");
+        logger.info("配置已重载；活动登录会话已保留。");
     }
 
     private void expireDisconnectedSessions() {
         int removed = sessionStore.expireGrace(clock.instant());
         if (removed > 0) {
-            logger.info("Expired {} reconnect grace record(s).", removed);
+            logger.info("已清理 {} 条过期断线宽限记录。", removed);
         }
     }
 
@@ -170,11 +170,11 @@ public final class HydwindGatePlugin {
         Messages newMessages = Messages.from(raw);
 
         if (config.pluginToken().isBlank()) {
-            logger.warn("website.token is blank and {} is not set; website verification will fail with 401.",
+            logger.warn("website.token 为空且未设置 {}；网站校验将返回 401 失败。",
                     PluginConfig.TOKEN_ENV);
         }
         if (config.websiteBaseUrl().isBlank()) {
-            throw new IllegalStateException("website.base-url must not be blank");
+            throw new IllegalStateException("website.base-url 不能为空");
         }
 
         WebsiteClient client = new HttpWebsiteClient(config);
@@ -207,21 +207,21 @@ public final class HydwindGatePlugin {
     private boolean ensureCompatibleRuntime() {
         String velocityVersion = server.getVersion().getVersion();
         if (!VersionCompat.isSupportedVelocity(velocityVersion)) {
-            logger.error("HydwindGate requires Velocity {} or newer, but this proxy reports '{}'. "
-                            + "Shutting the proxy down instead of running without a login gate.",
+            logger.error("HydwindGate 需要 Velocity {} 或更高版本，但当前代理报告 '{}'。"
+                            + "为避免在没有登录门禁的情况下运行，将关闭代理。",
                     VersionCompat.MINIMUM_VELOCITY_VERSION, velocityVersion);
             server.shutdown();
             return false;
         }
 
         if (server.getPluginManager().getPlugin("limboapi").isEmpty()) {
-            logger.error("LimboAPI is not loaded; install limboapi-1.2.0.jar in the proxy plugins "
-                    + "directory. HydwindGate cannot gate players without limbo and will shut down.");
+            logger.error("LimboAPI 未加载；请把 limboapi-1.2.0.jar 安装到代理的 plugins "
+                    + "目录。没有 limbo 时 HydwindGate 无法拦截玩家，将关闭代理。");
             server.shutdown();
             return false;
         }
 
-        logger.info("Runtime checks passed: Velocity {}, LimboAPI present.", velocityVersion);
+        logger.info("运行时检查通过：Velocity {}，LimboAPI 已安装。", velocityVersion);
         return true;
     }
 
@@ -240,24 +240,24 @@ public final class HydwindGatePlugin {
                     return Map.of();
                 }
                 if (!(loaded instanceof Map<?, ?> map)) {
-                    throw new IllegalStateException("config.yml must contain a YAML mapping: " + configFile);
+                    throw new IllegalStateException("config.yml 必须包含 YAML 映射：" + configFile);
                 }
                 Map<String, Object> result = new LinkedHashMap<>();
                 map.forEach((key, value) -> result.put(String.valueOf(key), value));
                 return result;
             }
         } catch (IOException exception) {
-            throw new IllegalStateException("Failed to read " + configFile, exception);
+            throw new IllegalStateException("读取配置失败：" + configFile, exception);
         }
     }
 
     private void copyDefaultConfig(Path configFile) throws IOException {
         try (InputStream defaultConfig = getClass().getClassLoader().getResourceAsStream(CONFIG_FILE)) {
             if (defaultConfig == null) {
-                throw new IllegalStateException("Bundled " + CONFIG_FILE + " is missing from the plugin jar");
+                throw new IllegalStateException("插件 jar 中缺少内置的 " + CONFIG_FILE);
             }
             Files.copy(defaultConfig, configFile);
-            logger.info("Created default configuration at {}.", configFile);
+            logger.info("已创建默认配置文件：{}。", configFile);
         }
     }
 

@@ -78,7 +78,7 @@ public final class LoginGateListener {
         try {
             limboLoginService.spawnInLimbo(player);
         } catch (RuntimeException exception) {
-            logger.error("Failed to spawn player {} into limbo; denying access.", player.getUsername(), exception);
+            logger.error("无法把玩家 {} 放入 limbo，已拒绝其访问。", player.getUsername(), exception);
             plugin.sessionStore().quit(player.getUniqueId(), plugin.clock().instant());
             player.disconnect(Component.text(plugin.messages().serviceMisconfigured()));
         }

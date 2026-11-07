@@ -105,6 +105,7 @@ curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
 - **启动版本检查**：启用时检查 `proxy.getVersion()` 至少为 4.1.2，并确认 `limboapi` 插件存在；不满足时记录明确错误并关闭代理，而不是在没有门禁的情况下继续运行。
 - **不开放额外端口**：插件只通过 HTTP(S) 访问网站，不监听任何新端口。
 - **管理员权限**：`admin.permission`（默认 `hydwind.admin`）由外部权限插件授予；未授权执行 `/hydwind` 只会收到无权限提示。
+- **日志语言**：插件自身通过 SLF4J 输出的日志（启动检查、登录、宽限清理、管理员命令、健康检查、配置重载与受控重启）均为中文；Velocity、LimboAPI 等第三方日志保持原语言。玩家可见文案来自 `messages` 配置，同样是中文。
 
 ## 配置
 
