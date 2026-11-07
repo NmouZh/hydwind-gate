@@ -13,6 +13,7 @@ import me.hydwind.gate.HydwindGatePlugin;
 import me.hydwind.gate.auth.KaomojiCode;
 import me.hydwind.gate.auth.LoginSession;
 import me.hydwind.gate.auth.LoginSessionStore;
+import me.hydwind.gate.command.AdminCommandRequest;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.web.Urls;
@@ -44,6 +45,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     private final UUID uuid;
     private final String gameId;
     private final String ip;
+    private final LimboLoginService limboService;
 
     private final AtomicBoolean authenticated = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -52,7 +54,9 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     private volatile ScheduledFuture<?> promptTask;
     private volatile ScheduledFuture<?> timeoutTask;
 
-    public LoginSessionHandler(HydwindGatePlugin plugin, Player proxyPlayer) {
+    public LoginSessionHandler(HydwindGatePlugin plugin,
+                               Player proxyPlayer,
+                               LimboLoginService limboService) {
         this.plugin = plugin;
         this.server = plugin.proxyServer();
         this.sessionStore = plugin.sessionStore();
@@ -62,11 +66,21 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         this.uuid = proxyPlayer.getUniqueId();
         this.gameId = proxyPlayer.getUsername();
         this.ip = remoteIp(proxyPlayer);
+        this.limboService = limboService;
+    }
+
+    public UUID uuid() {
+        return uuid;
+    }
+
+    public String gameId() {
+        return gameId;
     }
 
     @Override
     public void onSpawn(Limbo server, LimboPlayer player) {
         this.limboPlayer = player;
+        limboService.register(this);
         player.disableFalling();
         PluginConfig config = plugin.pluginConfig();
 
@@ -84,6 +98,13 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (closed.get()) {
             return;
         }
+
+        AdminCommandRequest adminRequest = AdminCommandRequest.parseLine(message);
+        if (adminRequest.type() != AdminCommandRequest.Type.NONE) {
+            plugin.adminCommandExecutor().execute(proxyPlayer, adminRequest);
+            return;
+        }
+
         if (authenticated.get()) {
             send(plugin.messages().alreadyAuthenticated());
             return;
@@ -92,7 +113,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         LoginCommand command = LoginCommand.parse(message);
         switch (command.status()) {
             case NOT_LOGIN -> {
-                // 其他聊天/命令由 LimboAPI 吞掉；V3 才处理管理员命令。
+                // 其他聊天/命令由 LimboAPI 吞掉，忽略。
             }
             case EMPTY_CODE -> send(plugin.messages().emptyCode());
             case TOO_LONG -> send(plugin.messages().codeTooLong());
@@ -103,7 +124,27 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     @Override
     public void onDisconnect() {
         closed.set(true);
+        limboService.unregister(uuid);
         cancelTasks();
+    }
+
+    /** 管理员手动放行：停止提示与超时，提示玩家后转到主服。 */
+    public void approveByAdmin(String message) {
+        if (closed.get() || !authenticated.compareAndSet(false, true)) {
+            return;
+        }
+        cancelTasks();
+        send(message);
+        transferToMainServer();
+    }
+
+    /** 管理员踢出：停止所有任务并断开连接。 */
+    public void kickByAdmin(String message) {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        cancelTasks();
+        proxyPlayer.disconnect(Component.text(message));
     }
 
     private void submit(String rawCode) {

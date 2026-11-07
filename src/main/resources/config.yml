@@ -68,11 +68,12 @@ messages:
   already-authenticated: "你已经完成认证，可以直接游戏。"
   admin:
     # /hydwind 命令文案；{player}、{permission}、{count}、{grace}、
-    # {uptime}、{remaining}、{time} 会按上下文替换。
+    # {uptime}、{remaining}、{time}、{error} 会按上下文替换。
     no-permission: "你没有权限使用 /hydwind（需要 {permission}）。"
     usage: "用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>"
     unknown-subcommand: "未知子命令。用法: /hydwind <status|reload|approve <玩家>|kick <玩家>>"
     reloaded: "配置已重载；进行中的登录会话保持不变。"
+    reload-failed: "配置重载失败: {error}"
     approve-usage: "用法: /hydwind approve <玩家>"
     kick-usage: "用法: /hydwind kick <玩家>"
     session-not-found: "没有找到玩家 {player} 的登录会话。"
@@ -81,6 +82,7 @@ messages:
     approved: "已放行玩家 {player}。"
     kicked-player: "你已被管理员踢出服务器。"
     kicked: "已踢出玩家 {player} 并清理会话。"
+    status-limbo: "Limbo 中: {count}"
     status-pending: "待认证: {count}"
     status-authenticated: "已认证: {count}"
     status-authenticated-grace: "已认证: {count}（其中离线宽限 {grace}）"

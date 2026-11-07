@@ -1,6 +1,7 @@
 package me.hydwind.gate;
 
 import com.google.inject.Inject;
+import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
@@ -19,6 +20,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import me.hydwind.gate.auth.LoginSessionStore;
+import me.hydwind.gate.command.AdminCommandExecutor;
+import me.hydwind.gate.command.HydwindCommand;
 import me.hydwind.gate.config.PluginConfig;
 import me.hydwind.gate.config.RestartSettings;
 import me.hydwind.gate.login.LimboLoginService;
@@ -56,8 +59,6 @@ public final class HydwindGatePlugin {
     private static final String CONFIG_FILE = "config.yml";
     /** 清理过期断线宽限记录的间隔。 */
     private static final long SESSION_SWEEP_SECONDS = 60L;
-    private static final java.util.logging.Logger RESTART_LOGGER =
-            java.util.logging.Logger.getLogger("me.hydwind.gate.RestartTrigger");
 
     private final Clock clock = Clock.systemUTC();
     private final ProxyServer server;
@@ -71,6 +72,7 @@ public final class HydwindGatePlugin {
     private RestartPolicy restartPolicy;
     private RestartTrigger restartTrigger;
     private LimboLoginService limboLoginService;
+    private AdminCommandExecutor adminCommandExecutor;
     private ScheduledTask sessionMaintenanceTask;
 
     @Inject
@@ -95,6 +97,14 @@ public final class HydwindGatePlugin {
         }
 
         server.getEventManager().register(this, new LoginGateListener(this, limboLoginService, logger));
+
+        adminCommandExecutor = new AdminCommandExecutor(this, limboLoginService);
+        CommandMeta commandMeta = server.getCommandManager()
+                .metaBuilder("hydwind")
+                .plugin(this)
+                .build();
+        server.getCommandManager().register(commandMeta, new HydwindCommand(this, adminCommandExecutor));
+
         sessionMaintenanceTask = server.getScheduler()
                 .buildTask(this, this::expireDisconnectedSessions)
                 .delay(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
@@ -175,7 +185,7 @@ public final class HydwindGatePlugin {
         this.messages = newMessages;
         this.websiteClient = client;
         this.restartTrigger = new RestartTrigger(client, restartPolicy, restartSettings,
-                clock, RESTART_LOGGER);
+                clock, logger);
     }
 
     private Map<String, Object> readConfigFile() {
@@ -248,5 +258,9 @@ public final class HydwindGatePlugin {
 
     public RestartTrigger restartTrigger() {
         return restartTrigger;
+    }
+
+    public AdminCommandExecutor adminCommandExecutor() {
+        return adminCommandExecutor;
     }
 }

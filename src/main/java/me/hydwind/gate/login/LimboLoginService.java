@@ -4,7 +4,11 @@ import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import me.hydwind.gate.HydwindGatePlugin;
 import me.hydwind.gate.config.PluginConfig;
 import net.elytrium.limboapi.api.Limbo;
@@ -26,6 +30,9 @@ public final class LimboLoginService {
     private final HydwindGatePlugin plugin;
     private final ProxyServer server;
     private final Logger logger;
+
+    /** 当前仍在 limbo 的玩家；供管理命令按名字查找与状态统计。 */
+    private final Map<UUID, LoginSessionHandler> residents = new ConcurrentHashMap<>();
 
     private LimboFactory factory;
     private Limbo limbo;
@@ -70,13 +77,78 @@ public final class LimboLoginService {
         if (limbo == null || factory == null) {
             throw new IllegalStateException("Limbo is not initialized");
         }
-        limbo.spawnPlayer(player, new LoginSessionHandler(plugin, player));
+        limbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this));
+    }
+
+    /** limbo 玩家在 {@code onSpawn} 后登记，供管理命令与状态统计使用。 */
+    public void register(LoginSessionHandler handler) {
+        residents.put(handler.uuid(), handler);
+    }
+
+    public void unregister(UUID uuid) {
+        residents.remove(uuid);
+    }
+
+    public Optional<LimboResident> findLimboPlayer(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return Optional.empty();
+        }
+        return residents.values().stream()
+                .filter(handler -> handler.gameId().equalsIgnoreCase(playerName))
+                .map(handler -> new LimboResident(handler.uuid(), handler.gameId()))
+                .findFirst();
+    }
+
+    public List<LimboResident> limboPlayers() {
+        return residents.values().stream()
+                .map(handler -> new LimboResident(handler.uuid(), handler.gameId()))
+                .toList();
+    }
+
+    public int limboPlayerCount() {
+        return residents.size();
+    }
+
+    /**
+     * 管理员手动放行 limbo 中的玩家：先写会话状态（否则转服会被门禁拒绝），
+     * 再让 session handler 停止提示并转到主服。
+     *
+     * @return 玩家当前是否仍在 limbo
+     */
+    public boolean approve(UUID uuid, String message) {
+        LoginSessionHandler handler = residents.get(uuid);
+        if (handler == null) {
+            return false;
+        }
+        plugin.sessionStore().forceAuthenticate(uuid, plugin.clock().instant());
+        handler.approveByAdmin(message);
+        return true;
+    }
+
+    /** 管理员踢出：清理会话并断开 limbo 玩家。 */
+    public boolean kick(UUID uuid, String message) {
+        LoginSessionHandler handler = residents.remove(uuid);
+        plugin.sessionStore().remove(uuid);
+        if (handler == null) {
+            return false;
+        }
+        handler.kickByAdmin(message);
+        return true;
     }
 
     public void shutdown() {
+        residents.clear();
         if (limbo != null) {
             limbo.dispose();
             limbo = null;
+        }
+    }
+
+    /** 只读的 limbo 玩家视图。 */
+    public record LimboResident(UUID uuid, String gameId) {
+        public LimboResident {
+            Objects.requireNonNull(uuid, "uuid");
+            Objects.requireNonNull(gameId, "gameId");
         }
     }
 
