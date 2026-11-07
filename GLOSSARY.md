@@ -71,7 +71,7 @@ _Avoid_: 请求 ID、token
 ## 管理动作
 
 **管理动作（admin action）**:
-管理员对单个玩家执行的一次 approve 或 kick，由 `AdminActionService` 统一维护“先写会话、再转服/断开”的顺序不变量。
+管理员对单个玩家执行的一次 approve 或 kick，由 `AdminActionService` 统一维护“approve 先把会话写成已认证、再转服；kick 先移除会话、再断开”的顺序不变量。
 _Avoid_: 管理命令、管理员操作（命令只是入口）
 
 ## 命令语法

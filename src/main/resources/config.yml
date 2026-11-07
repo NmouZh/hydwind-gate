@@ -15,8 +15,9 @@ website:
   # 网站根地址，插件据此拼接 /gate、健康检查路径与 /api/plugin/login/verify。
   # 留空、非法 URI 或非 http/https 会导致启动或重载失败。
   base-url: "http://103.236.99.253:62179"
-  # 网站插件令牌，与站务令牌分离。首次部署时填入。
-  # 环境变量 HYDWIND_PLUGIN_TOKEN 非空时优先于此处。
+  # 网站插件令牌，与站务令牌分离。
+  # 默认留空，用环境变量 HYDWIND_PLUGIN_TOKEN 注入（非空时优先于此处）。
+  # 只有不使用环境变量时才填在这里，并确保该文件不被提交或共享。
   token: ""
   # 健康检查路径（相对 base-url）；留空时回退默认值 /api/health。
   health-path: "/api/health"
@@ -37,7 +38,8 @@ auth:
 limbo:
   # LimboAPI 虚拟世界名。多个代理实例请使用不同名称。留空回退默认值；需重启代理生效。
   world: "hydwind_limbo"
-  # limbo 内玩家出生坐标，格式 "x, y, z"。需重启代理生效。
+  # limbo 内玩家出生坐标，格式 "x, y, z" 或 "x, y, z, yaw, pitch"。
+  # yaw 与 pitch 必须成对出现；只写 4 个值时会被忽略。需重启代理生效。
   # 格式畸形时只记录 WARN，并使用默认出生点。
   spawn: "0, 64, 0"
 

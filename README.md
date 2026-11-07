@@ -19,7 +19,7 @@
 - 会话进服时固定自己的 `loginDeadline`；每次成功进入验证（PENDING → VERIFYING）时分配 `verificationId`，编号按玩家 UUID 跨会话单调递增（重连后不从 1 重来），迟到或重复的网站结果会被丢弃。60 秒维护任务按各会话 deadline 兜底超时。
 - 配置按 `website` / `auth` / `limbo` / `admin` / `server` 五组映射为窄设置 record（`restart` 继续用 `RestartSettings`）；启动与 reload 集中校验：base-url/URI、超时、无法解析的数值字符串、auth 时限、restart 数值非法时直接失败，空白文本字段与缺失项回退默认值，畸形 `limbo.spawn` 只告警。
 - reload 构建完整的 `RuntimeSnapshot` 后整体替换，旧代际关闭；进行中的会话与重启计数保留。
-- `/hydwind` 的解析、补全与目标判断统一由 `CommandGrammar` 提供；approve / kick 由 `AdminActionService` 编排，先写会话再转服或断开。
+- `/hydwind` 的解析、补全与目标判断统一由 `CommandGrammar` 提供；approve / kick 由 `AdminActionService` 编排：approve 先把会话写成已认证、再转服；kick 先移除会话、再断开。
 - 网站响应新增 `CONTRACT_MISMATCH` 分类；verify 的 5xx 属于传输层失败，health 的非 200 属于契约不兼容；只有传输层失败才可能触发受控重启，契约不兼容只告警。
 - 启动时校验 LimboAPI 版本（最低 1.2.0）与 Velocity 版本；Velocity 过低或 LimboAPI 已加载但版本过低时记录错误并关闭代理。LimboAPI 缺失时插件因 Velocity 依赖机制不加载，代理继续运行但没有门禁。
 - JUnit 5 覆盖编排层（`LoginFlowTest`、`AdminActionServiceTest`、`CommandGrammarTest`、`RuntimeHolderTest`）、会话 deadline 与 `verificationId`、HTTP 契约与 `CONTRACT_MISMATCH`、配置窄视图与集中校验；真实 limbo 客户端交互按手工清单验证。
@@ -77,6 +77,10 @@ LimboAPI 1.2.0 不在 Maven Central / Elytrium Maven 上，需要从 GitHub Rele
 ```bash
 curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
   https://github.com/Elytrium/LimboAPI/releases/download/1.2.0/limboapi-1.2.0.jar
+
+# 必须校验：LimboAPI 1.2.0 只发布在 GitHub Release，是当前最大的供应链风险。
+echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/limboapi-1.2.0.jar" \
+  | sha256sum -c -
 ```
 
 `plugins/` 最终应同时包含：
@@ -88,7 +92,7 @@ curl -fL --create-dirs -o plugins/limboapi-1.2.0.jar \
 
 ## 部署
 
-1. 安装 Java 25 与 Velocity 4.1.2+，在 `velocity.toml` 配置至少一个名为 `server.main` 的后端服务器（ASCII 名，如 `main`）。
+1. 安装 Java 25 与 Velocity 4.1.2+，在 `velocity.toml` 的 `servers` 中配置后端（例如键名 `main`），并让插件配置 `server.main` 的值与这个键一致（默认 `main`）。`server.main` 是插件配置路径，不是 `velocity.toml` 里的服务器名。
 2. 把 `HydwindGate-0.1.0.jar` 与 `limboapi-1.2.0.jar` 放进 Velocity 的 `plugins/`（见上一节的下载方式）。
 3. 启动代理，插件会在 `plugins/hydwind-gate/config.yml` 生成默认配置。
 4. 设置环境变量 `HYDWIND_PLUGIN_TOKEN`，其值必须与网站侧 `PLUGIN_TOKEN` 一致；非空时优先于 `website.token`。
@@ -151,7 +155,7 @@ messages:
 - [ ] `website.base-url` 指向可访问的网站；正式开放前切换到 TLS。
 - [ ] 安装 `limboapi-1.2.0.jar`（最低 1.2.0）；LimboAPI 与 Velocity 版本强绑定，升级 Velocity 前先确认兼容版本。
 - [ ] 启动后在控制台确认 `HydwindGate ... enabled`；没有这行说明插件未加载，门禁不存在。
-- [ ] 创建 `/run/hydwind` 且代理进程用户可写；或把 `restart.request-path` 改到可写路径。
+- [ ] 创建 `/run/hydwind` 且代理进程用户可写；或把 `restart.request-path` 改到可写路径。`/run` 是 tmpfs，手工创建会在宿主机重启后消失——用 systemd 的 `RuntimeDirectory=hydwind` 或 `/etc/tmpfiles.d/hydwind.conf` 持久化，并让代理用户与网站服务同组（见 `hydwind-web/deploy/README.md` 第 3 节）。
 - [ ] 配置 systemd `hydwind-restart.path` + `.service`，监听重启请求文件。
 - [ ] 确认 `server.main` 与 `velocity.toml` 中的服务器名一致。
 - [ ] 管理员组拥有 `hydwind.admin`。
@@ -178,17 +182,28 @@ WantedBy=multi-user.target
 
 ```ini
 # /etc/systemd/system/hydwind-restart.service
+[Unit]
+Description=Restart Hydwind website on request
+After=hydwind-web.service
+
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl restart velocity
+# 重启的是网站，不是代理。重启代理会踢掉所有玩家，而且插件里的
+# 重启冷却与配额只存在内存中，会随代理重启一起清零。
+# 先重启，成功后删除请求文件；失败时保留文件以便 path 单元重试。
+ExecStart=/usr/bin/systemctl restart hydwind-web.service
+ExecStart=/usr/bin/rm -f /run/hydwind/restart-request
 ```
+
+> 这套 unit 与 `hydwind-web/deploy/` 下的同名文件是同一对，直接复制那里的一份，
+> 不要在两处各写一份（文件名相同会互相覆盖）。
 
 ## 命令
 
 - `/login <登录码>`：在 limbo 中完成认证。命令由 LimboAPI 吞掉并交给 `onChat` 解析，不经过 Velocity `CommandManager`；`/login` 注册为 limbo 命令仅为客户端 Tab 补全。为兼容聊天直发，不带前导 `/` 的 `login` / `hydwind` 也能识别。
 - `/hydwind status`：查看 limbo 玩家数、玩家名（最多 20 个）、待认证/已认证会话、离线宽限数、网站健康、重启额度。
 - `/hydwind reload`：热重载 `config.yml`；进行中的会话与重启计数保留，断线宽限立即更新。提示间隔与登录超时只对新会话生效——已进服玩家的登录截止时刻在会话创建时固定，reload 调大不会延长其超时。
-- `/hydwind approve <玩家>`：手动放行未认证会话并转到主服。
-- `/hydwind kick <玩家>`：清理会话并断开 limbo 或主服中的玩家。
+- `/hydwind approve <玩家>`：手动放行未认证会话并转到主服。顺序是**先把会话写成 AUTHENTICATED，再转服**。
+- `/hydwind kick <玩家>`：清理会话并断开 limbo 或主服中的玩家。顺序是**先移除会话，再断开**；反过来会让被踢玩家在宽限内重连时跳过登录。
 
 完整的手工验收项见 [docs/manual-test.md](docs/manual-test.md)。
