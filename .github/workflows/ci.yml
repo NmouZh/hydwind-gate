@@ -3,10 +3,13 @@ name: CI
 on:
   push:
     branches:
+      - main
       - feat/login-gate
       - 'feat/**'
+      - 'fix/**'
   pull_request:
     branches:
+      - main
       - feat/login-gate
   workflow_dispatch:
 
@@ -46,3 +49,10 @@ jobs:
           jar_file=$(ls build/libs/*.jar | head -n 1)
           unzip -l "$jar_file" | grep -q ' plugin.yml$'
           echo "plugin.yml found in $jar_file"
+
+      - name: Upload plugin jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: hydwind-gate
+          path: build/libs/*.jar
+          if-no-files-found: error
