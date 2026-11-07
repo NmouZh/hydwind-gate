@@ -5,3 +5,14 @@ api-version: '26.3'
 authors: [NmouZh]
 description: 氢风进服门禁插件
 website: https://github.com/NmouZh/hydwind-gate
+
+commands:
+  login:
+    description: 打开登录对话框，或直接提交登录码
+    usage: "/login [登录码]"
+    permission: hydwindgate.login
+
+permissions:
+  hydwindgate.login:
+    description: 允许使用 /login
+    default: true

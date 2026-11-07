@@ -174,7 +174,7 @@ public final class LoginSessionStore {
         return session;
     }
 
-    private static boolean withinGrace(LoginSession session, String gameId, String ip, Instant now) {
+    private boolean withinGrace(LoginSession session, String gameId, String ip, Instant now) {
         Instant disconnectedAt = session.disconnectedAt();
         return disconnectedAt != null
                 && session.matches(gameId, ip)
