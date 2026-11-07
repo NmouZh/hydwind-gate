@@ -24,7 +24,6 @@ import java.util.UUID;
 public final class HttpWebsiteClient implements WebsiteClient {
 
     private static final String VERIFY_PATH = "/api/plugin/login/verify";
-    private static final String HEALTH_PATH = "/api/health";
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
     private static final Duration HEALTH_MAX_TIMEOUT = Duration.ofSeconds(2);
@@ -33,6 +32,7 @@ public final class HttpWebsiteClient implements WebsiteClient {
     private final String baseUrl;
     private final String pluginToken;
     private final Duration readTimeout;
+    private final String healthPath;
 
     public HttpWebsiteClient(PluginConfig config) {
         Objects.requireNonNull(config, "config");
@@ -44,6 +44,7 @@ public final class HttpWebsiteClient implements WebsiteClient {
         this.pluginToken = config.pluginToken() == null ? "" : config.pluginToken();
         this.readTimeout = Duration.ofMillis(positiveOrDefault(
                 config.readTimeoutMillis(), DEFAULT_READ_TIMEOUT_MILLIS));
+        this.healthPath = normalizePath(config.healthPath());
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(positiveOrDefault(
                         config.connectTimeoutMillis(), DEFAULT_CONNECT_TIMEOUT_MILLIS)))
@@ -84,7 +85,7 @@ public final class HttpWebsiteClient implements WebsiteClient {
     @Override
     public HealthResult health() {
         Duration timeout = readTimeout.compareTo(HEALTH_MAX_TIMEOUT) < 0 ? readTimeout : HEALTH_MAX_TIMEOUT;
-        HttpRequest request = HttpRequest.newBuilder(uri(HEALTH_PATH))
+        HttpRequest request = HttpRequest.newBuilder(uri(healthPath))
                 .timeout(timeout)
                 .header("Accept", "application/json")
                 .GET()
@@ -183,6 +184,14 @@ public final class HttpWebsiteClient implements WebsiteClient {
             end--;
         }
         return url.substring(0, end);
+    }
+
+    private static String normalizePath(String path) {
+        String trimmed = Objects.requireNonNull(path, "path").trim();
+        if (trimmed.isEmpty()) {
+            return PluginConfig.DEFAULT_HEALTH_PATH;
+        }
+        return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
     }
 
     private static int positiveOrDefault(int value, int fallback) {

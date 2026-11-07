@@ -148,7 +148,7 @@ class AdminServiceTest {
 
         private final List<UUID> unfrozen = new ArrayList<>();
         private final List<UUID> kicked = new ArrayList<>();
-        private final List<String> messages = new ArrayList<>();
+        private final List<UUID> messages = new ArrayList<>();
 
         @Override
         public void sendMessage(UUID playerId, String message) {

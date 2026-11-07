@@ -1,5 +1,7 @@
 plugins {
     java
+    // 供 `gradle runServer` 拉起 Paper 26.3 做集成验证；CI 只执行 build，不启动服务器。
+    id("xyz.jpenilla.run-paper") version "3.1.0"
 }
 
 group = "me.hydwind"
@@ -34,6 +36,13 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks {
+    runServer {
+        // 与 build 中的 paper-api 保持一致。首次运行会下载 Paper 26.3。
+        minecraftVersion("26.3")
+    }
 }
 
 tasks.processResources {
