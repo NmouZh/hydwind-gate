@@ -3,6 +3,7 @@ package me.hydwind.gate.web;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.hydwind.gate.config.PluginConfig;
+import me.hydwind.gate.util.Throwables;
 
 import java.io.IOException;
 import java.net.URI;
@@ -13,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 基于 {@link HttpClient} 的 {@link WebsiteClient} 实现。
@@ -20,9 +23,13 @@ import java.util.UUID;
  * <p>网络故障、超时、无法解析的响应映射为
  * {@link VerifyResult.Status#UNREACHABLE} / {@link HealthResult#unhealthy()}；
  * 401/403/404 映射为明确的失败结果，由调用方按配置文案提示。</p>
+ *
+ * <p>日志会记录完整请求 URL、状态码、耗时与异常 cause 链；登录码、插件令牌
+ * 与响应体原文不写入日志。响应体只提取 {@code reason} 字段用于诊断。</p>
  */
 public final class HttpWebsiteClient implements WebsiteClient {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(HttpWebsiteClient.class);
     private static final String VERIFY_PATH = "/api/plugin/login/verify";
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_READ_TIMEOUT_MILLIS = 5000;
@@ -62,7 +69,8 @@ public final class HttpWebsiteClient implements WebsiteClient {
         payload.addProperty("gameId", gameId);
         payload.addProperty("uuid", uuid.toString());
 
-        HttpRequest request = HttpRequest.newBuilder(uri(VERIFY_PATH))
+        URI endpoint = uri(VERIFY_PATH);
+        HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(readTimeout)
                 .header("Authorization", "Bearer " + pluginToken)
                 .header("Content-Type", "application/json")
@@ -70,15 +78,37 @@ public final class HttpWebsiteClient implements WebsiteClient {
                 .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
                 .build();
 
+        long startedAt = System.nanoTime();
+        LOGGER.info("网站校验请求：玩家={}，gameId={}，uuid={}，URL={}，超时={}ms",
+                gameId, gameId, uuid, endpoint, readTimeout.toMillis());
+
         try {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long elapsedMillis = elapsedMillis(startedAt);
             String retryAfterHeader = response.headers().firstValue("Retry-After").orElse(null);
-            return mapVerifyResponse(response.statusCode(), response.body(), retryAfterHeader);
-        } catch (IOException e) {
+            String responseReason = extractReason(response.body());
+            VerifyResult result = mapVerifyResponse(response.statusCode(), response.body(), retryAfterHeader);
+
+            if (result.status() == VerifyResult.Status.RATE_LIMITED) {
+                LOGGER.warn("网站校验被限流：玩家={}，HTTP {}，reason={}，retryAfterMs={}，attemptsRemaining={}，耗时={}ms",
+                        gameId, response.statusCode(), responseReason, result.retryAfterMs(),
+                        result.attemptsRemaining(), elapsedMillis);
+            } else {
+                LOGGER.info("网站校验响应：玩家={}，HTTP {}，reason={}，结果={}，触发重启检查={}，耗时={}ms",
+                        gameId, response.statusCode(), responseReason, result.status(),
+                        willTriggerRestart(result), elapsedMillis);
+            }
+            return result;
+        } catch (IOException exception) {
+            LOGGER.warn("网站校验请求失败：玩家={}，gameId={}，URL={}，耗时={}ms，异常={}",
+                    gameId, gameId, endpoint, elapsedMillis(startedAt),
+                    Throwables.describe(exception));
             return VerifyResult.unreachable();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            LOGGER.warn("网站校验请求被中断：玩家={}，URL={}，耗时={}ms，异常={}",
+                    gameId, endpoint, elapsedMillis(startedAt), Throwables.describe(exception));
             return VerifyResult.unreachable();
         }
     }
@@ -86,20 +116,38 @@ public final class HttpWebsiteClient implements WebsiteClient {
     @Override
     public HealthResult health() {
         Duration timeout = readTimeout.compareTo(HEALTH_MAX_TIMEOUT) < 0 ? readTimeout : HEALTH_MAX_TIMEOUT;
-        HttpRequest request = HttpRequest.newBuilder(uri(healthPath))
+        URI endpoint = uri(healthPath);
+        HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(timeout)
                 .header("Accept", "application/json")
                 .GET()
                 .build();
 
+        long startedAt = System.nanoTime();
+        LOGGER.info("网站健康检查请求：URL={}，超时={}ms", endpoint, timeout.toMillis());
+
         try {
             HttpResponse<String> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return mapHealthResponse(response.statusCode(), response.body());
-        } catch (IOException e) {
+            long elapsedMillis = elapsedMillis(startedAt);
+            HealthResult result = mapHealthResponse(response.statusCode(), response.body());
+            if (result.healthy()) {
+                LOGGER.info("网站健康检查通过：URL={}，HTTP {}，uptime={}s，耗时={}ms",
+                        endpoint, response.statusCode(), result.uptimeSeconds(), elapsedMillis);
+            } else {
+                LOGGER.warn("网站健康检查失败：URL={}，HTTP {}，原因={}，耗时={}ms",
+                        endpoint, response.statusCode(), healthFailureReason(response.statusCode(), response.body()),
+                        elapsedMillis);
+            }
+            return result;
+        } catch (IOException exception) {
+            LOGGER.warn("网站健康检查请求异常：URL={}，耗时={}ms，异常={}",
+                    endpoint, elapsedMillis(startedAt), Throwables.describe(exception));
             return HealthResult.unhealthy();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            LOGGER.warn("网站健康检查请求被中断：URL={}，耗时={}ms，异常={}",
+                    endpoint, elapsedMillis(startedAt), Throwables.describe(exception));
             return HealthResult.unhealthy();
         }
     }
@@ -190,6 +238,36 @@ public final class HttpWebsiteClient implements WebsiteClient {
             retryAfterMs = parseRetryAfterHeader(retryAfterHeader);
         }
         return VerifyResult.rateLimited(retryAfterMs, attemptsRemaining);
+    }
+
+    private static boolean willTriggerRestart(VerifyResult result) {
+        return result.status() == VerifyResult.Status.UNREACHABLE;
+    }
+
+    private static String extractReason(String body) {
+        try {
+            JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+            if (json.has("reason") && !json.get("reason").isJsonNull()) {
+                return json.get("reason").getAsString();
+            }
+            if (json.has("ok") && !json.get("ok").isJsonNull()) {
+                return json.get("ok").getAsBoolean() ? "ok" : "ok=false";
+            }
+        } catch (RuntimeException ignored) {
+            // 响应体不是预期 JSON 时只记录 HTTP 状态，避免把原文写进日志。
+        }
+        return "-";
+    }
+
+    private static String healthFailureReason(int statusCode, String body) {
+        if (statusCode != 200) {
+            return "HTTP " + statusCode + "（reason=" + extractReason(body) + "）";
+        }
+        return "响应体未返回 ok=true（reason=" + extractReason(body) + "）";
+    }
+
+    private static long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000L;
     }
 
     private static Long optionalLong(JsonObject json, String member) {

@@ -31,6 +31,7 @@ import me.hydwind.gate.ui.Messages;
 import me.hydwind.gate.web.HttpWebsiteClient;
 import me.hydwind.gate.web.RestartPolicy;
 import me.hydwind.gate.web.RestartTrigger;
+import me.hydwind.gate.web.Urls;
 import me.hydwind.gate.web.WebsiteClient;
 import org.slf4j.Logger;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -116,11 +117,20 @@ public final class HydwindGatePlugin {
                 .repeat(SESSION_SWEEP_SECONDS, TimeUnit.SECONDS)
                 .schedule();
 
-        logger.info("HydwindGate {} 已启用（主服：{}，limbo 世界：{}）。",
-                VERSION, pluginConfig.mainServer(), pluginConfig.limboWorld());
-        logger.info("网站：{}，健康检查路径：{}，重启请求文件：{}。",
+        logger.info("HydwindGate {} 已启用：主服={}，limbo 世界={}，token={}。",
+                VERSION, pluginConfig.mainServer(), pluginConfig.limboWorld(),
+                tokenState(pluginConfig));
+        logger.info("网站：base-url={}，健康检查路径={}，连接超时={}ms，读取超时={}ms，"
+                        + "登录超时={}s，断线宽限={}s，提示间隔={}s。",
                 pluginConfig.websiteBaseUrl(), pluginConfig.healthPath(),
-                pluginConfig.restart().requestFile());
+                pluginConfig.connectTimeoutMillis(), pluginConfig.readTimeoutMillis(),
+                pluginConfig.loginTimeout().toSeconds(), pluginConfig.reconnectGrace().toSeconds(),
+                pluginConfig.promptInterval().toSeconds());
+        logger.info("受控重启：请求文件={}，冷却={}s，窗口={}s，窗口内上限={}。",
+                pluginConfig.restart().requestFile(),
+                pluginConfig.restart().cooldown().toSeconds(),
+                pluginConfig.restart().window().toSeconds(),
+                pluginConfig.restart().maxPerWindow());
     }
 
     @Subscribe
@@ -144,13 +154,23 @@ public final class HydwindGatePlugin {
      * 的会话定时器无法安全重排。</p>
      */
     public void reloadConfiguration() {
-        String previousLimbo = limboKey(pluginConfig);
+        PluginConfig previous = pluginConfig;
+        String previousLimbo = limboKey(previous);
         loadConfiguration();
         if (previousLimbo != null && !previousLimbo.equals(limboKey(pluginConfig))) {
             logger.warn("limbo.world 或 limbo.spawn 已变更；需重启代理后生效"
                     + "（当前 limbo 及其中的玩家会保留）。");
         }
-        logger.info("配置已重载；活动登录会话已保留。");
+        logger.info("配置已重载：website.base-url {} -> {}，token {} -> {}，主服 {} -> {}，limbo 世界 {} -> {}；"
+                        + "活动登录会话已保留。",
+                previous == null ? "-" : previous.websiteBaseUrl(),
+                pluginConfig.websiteBaseUrl(),
+                previous == null ? "未配置" : tokenState(previous),
+                tokenState(pluginConfig),
+                previous == null ? "-" : previous.mainServer(),
+                pluginConfig.mainServer(),
+                previous == null ? "-" : previous.limboWorld(),
+                pluginConfig.limboWorld());
     }
 
     private void expireDisconnectedSessions() {
@@ -158,6 +178,10 @@ public final class HydwindGatePlugin {
         if (removed > 0) {
             logger.info("已清理 {} 条过期断线宽限记录。", removed);
         }
+    }
+
+    private static String tokenState(PluginConfig config) {
+        return config == null || config.pluginToken().isBlank() ? "未配置" : "已配置";
     }
 
     private static String limboKey(PluginConfig config) {
@@ -172,9 +196,19 @@ public final class HydwindGatePlugin {
         if (config.pluginToken().isBlank()) {
             logger.warn("website.token 为空且未设置 {}；网站校验将返回 401 失败。",
                     PluginConfig.TOKEN_ENV);
+        } else {
+            logger.debug("website.token 已配置（值不打印）。");
         }
         if (config.websiteBaseUrl().isBlank()) {
-            throw new IllegalStateException("website.base-url 不能为空");
+            String message = "website.base-url 不能为空";
+            logger.error(message);
+            throw new IllegalStateException(message);
+        }
+        if (!Urls.isAbsoluteHttpUrl(config.websiteBaseUrl())) {
+            String message = "website.base-url 必须是 http:// 或 https:// 开头的绝对地址，当前值："
+                    + config.websiteBaseUrl();
+            logger.error(message);
+            throw new IllegalStateException(message);
         }
 
         WebsiteClient client = new HttpWebsiteClient(config);

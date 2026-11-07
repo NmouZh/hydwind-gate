@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
 import me.hydwind.gate.config.RestartSettings;
+import me.hydwind.gate.util.Throwables;
 import org.slf4j.Logger;
 
 /**
@@ -40,41 +41,53 @@ public final class RestartTrigger {
 
     /** 收到 UNREACHABLE 时调用：探活失败且策略允许时写入重启请求文件。 */
     public void onUnreachable() {
+        Path requestFile = settings.requestFile();
+        Path fullPath = requestFile.toAbsolutePath().normalize();
+        logger.warn("网站校验不可达，开始受控重启评估：原因=website-unreachable，请求文件={}", fullPath);
+
         HealthResult health;
         try {
             health = websiteClient.health();
         } catch (RuntimeException exception) {
-            logger.warn("网站健康检查异常，按不可用处理: {}", exception.toString());
+            logger.warn("网站健康检查异常，按不可用处理：异常={}", Throwables.describe(exception));
             health = HealthResult.unhealthy();
         }
 
         if (health == null || health.healthy()) {
-            logger.info("收到登录校验不可达，但网站健康检查通过，跳过重启。");
+            logger.info("受控重启评估：健康检查={}，跳过重启。",
+                    health == null ? "无结果" : "通过（uptime=" + health.uptimeSeconds() + "s）");
             return;
         }
+        logger.warn("受控重启评估：健康检查=失败（uptime={}s）。", health.uptimeSeconds());
 
         Instant now = clock.instant();
+        int remaining = policy.remaining(now);
         if (!policy.tryAcquire(now)) {
-            logger.warn("网站不可达，但重启请求被策略拒绝（冷却中或已达到每小时上限）；请求文件: {}",
-                    settings.requestFile());
+            logger.warn("网站不可达，但重启请求被策略拒绝（冷却中或已达到每小时上限）；"
+                            + "触发前剩余额度={}，最早可触发={}，请求文件={}",
+                    remaining,
+                    policy.nextAllowed(now).map(Instant::toString).orElse("无"),
+                    fullPath);
             return;
         }
+        logger.info("重启策略允许本次请求（触发前剩余额度={}），准备写入：{}", remaining, fullPath);
 
-        Path requestFile = settings.requestFile();
         try {
-            Path parent = requestFile.toAbsolutePath().getParent();
+            Path parent = fullPath.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            Files.writeString(requestFile, content(now), StandardCharsets.UTF_8,
+            String fileContent = content(now);
+            Files.writeString(fullPath, fileContent, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.WRITE,
                     StandardOpenOption.TRUNCATE_EXISTING);
-            logger.warn("网站不可达，已写入重启请求文件: {}", requestFile);
+            logger.warn("网站不可达，已写入重启请求文件：路径={}，原因={}，请求时间={}",
+                    fullPath, "website-unreachable", now);
         } catch (IOException | RuntimeException exception) {
             // 文件系统异常、权限不足等只告警；重启额度仍视为已消耗，避免异常路径造成重启风暴。
-            logger.warn("网站不可达，但写入重启请求文件失败: {} ({})",
-                    requestFile, exception.toString());
+            logger.warn("网站不可达，但写入重启请求文件失败：路径={}，异常={}",
+                    fullPath, Throwables.describe(exception));
         }
     }
 
