@@ -104,7 +104,10 @@ public final class HydwindGatePlugin extends JavaPlugin {
         Executor asyncExecutor = runnable ->
                 getServer().getScheduler().runTaskAsynchronously(this, runnable);
         loginManager = new LoginManager(websiteClient, sessionStore, playerGateway, messages,
-                pluginConfig.loginTimeout(), clock, asyncExecutor, uuid -> restartTrigger.onUnreachable());
+                pluginConfig.loginTimeout(), clock, asyncExecutor,
+                // 探活与写文件放到独立异步任务，不阻塞玩家收到 fail-closed 提示。
+                uuid -> getServer().getScheduler().runTaskAsynchronously(this,
+                        restartTrigger::onUnreachable));
 
         registerListeners();
         registerCommands(playerGateway, asyncExecutor);
