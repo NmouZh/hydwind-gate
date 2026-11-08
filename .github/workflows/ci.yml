@@ -45,9 +45,12 @@ jobs:
           gradle-version: '9.7.0'
 
       - name: Build
-        # --rerun-tasks + --no-build-cache：确保 JUnit 结果是本次真实执行，
-        # 而不是 Gradle 缓存里恢复的旧 XML。
-        run: gradle build --rerun-tasks --no-build-cache
+        # 构建本身允许缓存；LimboAPI 下载任务带 SHA-256 校验，避免每次 rerun 都依赖 GitHub CDN。
+        run: gradle build --no-build-cache
+
+      - name: Run tests without Gradle test cache
+        # 单独重跑测试，确保下面的 JUnit XML 是本次真实执行，而不是缓存恢复的旧结果。
+        run: gradle test --rerun-tasks --no-build-cache
 
       - name: Report JUnit test count
         run: |
