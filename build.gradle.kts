@@ -18,6 +18,10 @@ repositories {
 val limboApiVersion = "1.2.0"
 val limboApiUrl = "https://github.com/Elytrium/LimboAPI/releases/download/" +
     "$limboApiVersion/limboapi-$limboApiVersion.jar"
+// GitHub Release 的浏览器下载地址偶尔返回 504；优先走 API 资产地址（可用 GITHUB_TOKEN 提升限额），
+// 失败再退回原始 release URL。两条路径都仍由下面的 SHA-256 校验兜底。
+val limboApiAssetApiUrl =
+    "https://api.github.com/repos/Elytrium/LimboAPI/releases/assets/698175322"
 // GitHub Releases API 为 1.2.0 资产公布的 SHA-256（原字段形式 sha256:<hex>）。
 // 来源：https://api.github.com/repos/Elytrium/LimboAPI/releases/tags/1.2.0
 val limboApiSha256 = "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31"
@@ -32,11 +36,22 @@ val downloadLimboApi = tasks.register<Exec>("downloadLimboApi") {
     description = "Downloads LimboAPI $limboApiVersion from GitHub Releases for compileOnly use."
     inputs.property("sha256", limboApiSha256)
     outputs.file(limboApiJarPath)
-    commandLine(
-        "curl", "-fsSL", "--retry", "3", "--create-dirs",
-        "-A", "hydwind-gate-build",
-        "-o", limboApiJarPath, limboApiUrl
-    )
+    // 用 shell 是为了在 API 下载失败时自动回退到 release 下载地址；
+    // 路径与 URL 由 Gradle 在配置期展开，GITHUB_TOKEN 由运行时环境注入。
+    val script = """
+        set -eu
+        mkdir -p "$(dirname "$limboApiJarPath")"
+        if [ -n "${'$'}{GITHUB_TOKEN:-}" ]; then
+          curl -fsSL --retry 3 -H "Authorization: Bearer ${'$'}GITHUB_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            -o "$limboApiJarPath" "$limboApiAssetApiUrl" && exit 0
+        fi
+        curl -fsSL --retry 3 -H "Accept: application/octet-stream" \
+          -o "$limboApiJarPath" "$limboApiAssetApiUrl" && exit 0
+        curl -fsSL --retry 3 -A hydwind-gate-build \
+          -o "$limboApiJarPath" "$limboApiUrl"
+    """.trimIndent()
+    commandLine("sh", "-c", script)
 }
 
 // 不声明 outputs，因此每次构建都会执行；sha256sum 的额外成本可以忽略。

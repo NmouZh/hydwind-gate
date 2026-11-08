@@ -28,6 +28,9 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # 抬高 GitHub API 资产下载限额；Gradle 的下载任务会自动使用。
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
