@@ -79,7 +79,8 @@ public final class LoginSessionStore {
         // 连接注册进 Velocity 之前就触发本事件，同名攻击者可以抢在受害者
         // 前面 join，从而改写会话的 IP/连接代际。等旧连接真正断线
         // （disconnectedAt != null）后，才允许宽限重连或重新登录。
-        if (existing != null && existing.disconnectedAt() == null) {
+        if (existing != null && existing.disconnectedAt() == null
+                && existing.status() != LoginSession.Status.TIMED_OUT) {
             return new JoinResult(existing, 0L, true);
         }
 

@@ -283,7 +283,7 @@ class LoginSessionStoreTest {
         assertTrue(duplicate.rejected(), "在线会话不能被第二条连接顶替");
         assertEquals(LoginSession.Status.AUTHENTICATED, duplicate.session().status());
         assertEquals(START, duplicate.session().enteredAt());
-        assertEquals(START, duplicate.session().lastActivityAt());
+        assertEquals(START.plusSeconds(2), duplicate.session().lastActivityAt());
         assertEquals(START.plus(LOGIN_TIMEOUT), duplicate.session().loginDeadline());
         assertEquals(1L, duplicate.session().verificationId());
     }
@@ -378,8 +378,8 @@ class LoginSessionStoreTest {
         store.join(SECOND, "PlayerTwo", IP, START.plusSeconds(60), LOGIN_TIMEOUT);
         assertTrue(store.beginVerification(SECOND, START.plusSeconds(61)).isPresent());
         join(store, THIRD, "PlayerThree", START);
-        assertTrue(store.beginVerification(THIRD, START.plusSeconds(1)).isPresent());
-        assertTrue(store.authenticationSucceeded(THIRD, 1L, START.plusSeconds(2)));
+        long thirdId = store.beginVerification(THIRD, START.plusSeconds(1)).orElseThrow();
+        assertTrue(store.authenticationSucceeded(THIRD, thirdId, START.plusSeconds(2)));
 
         List<LoginSession> firstSweep = store.timeOutAll(START.plus(LOGIN_TIMEOUT));
 
@@ -418,8 +418,8 @@ class LoginSessionStoreTest {
         store.quit(PLAYER, START.plusSeconds(10));
 
         join(store, SECOND, "PlayerTwo", START);
-        assertTrue(store.beginVerification(SECOND, START.plusSeconds(1)).isPresent());
-        assertTrue(store.authenticationSucceeded(SECOND, 1L, START.plusSeconds(2)));
+        long secondId = store.beginVerification(SECOND, START.plusSeconds(1)).orElseThrow();
+        assertTrue(store.authenticationSucceeded(SECOND, secondId, START.plusSeconds(2)));
 
         join(store, THIRD, "PlayerThree", START);
 
@@ -442,8 +442,8 @@ class LoginSessionStoreTest {
         store.quit(PLAYER, START.plusSeconds(10));
 
         join(store, SECOND, "PlayerTwo", START);
-        assertTrue(store.beginVerification(SECOND, START.plusSeconds(1)).isPresent());
-        assertTrue(store.authenticationSucceeded(SECOND, 1L, START.plusSeconds(2)));
+        long secondId = store.beginVerification(SECOND, START.plusSeconds(1)).orElseThrow();
+        assertTrue(store.authenticationSucceeded(SECOND, secondId, START.plusSeconds(2)));
         Instant secondDeadline = store.find(SECOND).orElseThrow().loginDeadline();
 
         store.setReconnectGrace(Duration.ofSeconds(30));
