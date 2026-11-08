@@ -57,6 +57,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     private final Player proxyPlayer;
     private final UUID uuid;
     private final String gameId;
+    private final long connectionId;
     private final LoginIdentity identity;
     private final AdminCommandExecutor adminCommandExecutor;
     /** 仅用于本会话的提示间隔与超时排期；这两项按设计不随 reload 重排。 */
@@ -65,14 +66,25 @@ public final class LoginSessionHandler implements LimboSessionHandler {
 
     private final AtomicBoolean authenticated = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    /**
+     * 转服动作只发起一次。和 {@link #authenticated} 分开：管理员可能在 spawn
+     * 之前放行，此时认证已写入但 limboPlayer 还没就绪，不能把“已发起转服”
+     * 也标记掉，否则 onSpawn 会永远不再转服。
+     */
+    private final AtomicBoolean transferStarted = new AtomicBoolean(false);
+    /** 认证成功后等待玩家离开 limbo 的上限；超时说明转服静默失败。 */
+    private static final long TRANSFER_WATCHDOG_SECONDS = 30L;
 
     private volatile LimboPlayer limboPlayer;
     private volatile ScheduledFuture<?> promptTask;
     private volatile ScheduledFuture<?> timeoutTask;
+    /** 转服看门狗独立保存，避免被 onSpawn 末尾的 cancelTasks 误取消。 */
+    private volatile ScheduledFuture<?> transferWatchdogTask;
 
     public LoginSessionHandler(HydwindGatePlugin plugin,
                                Player proxyPlayer,
-                               LimboLoginService limboService) {
+                               LimboLoginService limboService,
+                               long connectionId) {
         this.plugin = plugin;
         this.server = plugin.proxyServer();
         this.sessionStore = plugin.sessionStore();
@@ -81,7 +93,9 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         this.proxyPlayer = proxyPlayer;
         this.uuid = proxyPlayer.getUniqueId();
         this.gameId = proxyPlayer.getUsername();
-        this.identity = new LoginIdentity(uuid, gameId, RemoteAddress.remoteIp(proxyPlayer.getRemoteAddress()));
+        this.connectionId = connectionId;
+        this.identity = new LoginIdentity(
+                uuid, gameId, RemoteAddress.remoteIp(proxyPlayer.getRemoteAddress()), connectionId);
         // 配置只冻结提示间隔与超时排期；文案、客户端与触发器在每次操作时取当前代际。
         this.config = plugin.pluginConfig();
         this.adminCommandExecutor = plugin.adminCommandExecutor();
@@ -103,14 +117,23 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             return;
         }
 
+        // 会话可能已经被旧连接的迟到断线事件删掉（或过期 sweep 清掉），
+        // 也可能当前连接已经被同 UUID 的新连接顶替。不能继续提示/排队。
+        if (sessionStore.find(uuid).isEmpty()
+                || !sessionStore.isCurrentConnection(uuid, connectionId)) {
+            closed.set(true);
+            limboService.unregister(uuid, this);
+            cancelTasks();
+            proxyPlayer.disconnect(Component.text(
+                    me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured()));
+            return;
+        }
+
         // 管理员可能在 spawn 之前就放行了（approve-before-spawn）：会话已是
         // AUTHENTICATED 时不再提示、不再排超时任务，直接转服，避免卡在 limbo。
-        // 用 CAS 与 approveByAdmin 互斥，避免两条路径各转服一次。
         if (sessionAuthenticated()) {
-            if (authenticated.compareAndSet(false, true)) {
-                cancelTasks();
-                transferToMainServer();
-            }
+            authenticated.set(true);
+            transferToMainServer();
             return;
         }
 
@@ -123,11 +146,19 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             limboService.unregister(uuid, this);
             return;
         }
+        // 管理员 kick 可能刚好发生在 register 之前：会话已删除时必须撤销登记并断开。
+        if (sessionStore.find(uuid).isEmpty()
+                || !sessionStore.isCurrentConnection(uuid, connectionId)) {
+            closed.set(true);
+            limboService.unregister(uuid, this);
+            cancelTasks();
+            proxyPlayer.disconnect(Component.text(
+                    me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured()));
+            return;
+        }
         if (authenticated.get() || sessionAuthenticated()) {
-            if (authenticated.compareAndSet(false, true)) {
-                cancelTasks();
-                transferToMainServer();
-            }
+            authenticated.set(true);
+            transferToMainServer();
             return;
         }
 
@@ -160,7 +191,21 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (closed.get()) {
             return;
         }
+        try {
+            handleChat(message);
+        } catch (RuntimeException exception) {
+            // LimboAPI 的回调抛异常会打断该玩家的聊天处理且玩家得不到提示；
+            // 统一记录并按 fail-closed 断开，避免留下半处理状态。
+            logger.error("Failed to handle chat for player {}; denying access.",
+                    gameId, exception);
+            closed.set(true);
+            cancelTasks();
+            proxyPlayer.disconnect(Component.text(
+                    me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured()));
+        }
+    }
 
+    private void handleChat(String message) {
         Optional<AdminCommandRequest> adminRequest = CommandGrammar.parseLine(message);
         if (adminRequest.isPresent()) {
             adminCommandExecutor.execute(proxyPlayer, adminRequest.get());
@@ -184,19 +229,25 @@ public final class LoginSessionHandler implements LimboSessionHandler {
                 send(messages.verifying());
                 long verificationId = result.verificationId();
                 String code = result.normalizedCode();
-                // 网站调用是阻塞的，放到代理调度线程，避免卡住 Limbo 线程。
-                server.getScheduler()
-                        .buildTask(plugin, () -> verify(verificationId, code))
-                        .schedule();
+                // 网站调用是阻塞的：交给专用虚拟线程执行器，Velocity 调度池只负责
+                // 在结果回来后执行发消息、转服、断开等平台动作。
+                if (!plugin.submitWebsiteTask(() -> verify(verificationId, code))) {
+                    // 并发已满：把会话退回 PENDING，玩家可以立刻重试。
+                    sessionStore.authenticationFailed(
+                            uuid, connectionId, verificationId, clock.instant());
+                    send(messages.serviceUnavailable());
+                }
             }
             case REJECTED -> {
                 // 只有仍在验证中才提示“正在验证”；超时/断线后的提交保持静默。
-                boolean verifying = sessionStore.find(uuid)
-                        .map(session -> session.status() == LoginSession.Status.VERIFYING)
-                        .orElse(false);
-                if (verifying) {
-                    send(messages.verifying());
-                }
+                // PENDING 被拒绝通常是验证并发/计数器已满，也给一个可重试提示。
+                sessionStore.find(uuid).ifPresent(session -> {
+                    if (session.status() == LoginSession.Status.VERIFYING) {
+                        send(messages.verifying());
+                    } else if (session.status() == LoginSession.Status.PENDING) {
+                        send(messages.serviceUnavailable());
+                    }
+                });
             }
         }
     }
@@ -207,15 +258,19 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         // 只注销自己：同一 UUID 的新连接可能已经登记，不能被旧连接的迟到事件删掉。
         limboService.unregister(uuid, this);
         cancelTasks();
+        cancelTransferWatchdog();
     }
 
-    /** 管理员手动放行：停止提示与超时，提示玩家后转到主服。会话状态已由编排层写入。 */
+    /** 管理员手动放行：提示玩家后转到主服。会话状态已由编排层写入。 */
     public void approveByAdmin(String message) {
-        if (closed.get() || !authenticated.compareAndSet(false, true)) {
+        if (closed.get()) {
             return;
         }
-        cancelTasks();
-        send(message);
+        // 已经认证但还卡在 limbo（转服静默失败/尚未 spawn）时，管理员再次
+        // approve 应重试转服，而不是直接返回“已经认证”。
+        if (authenticated.compareAndSet(false, true)) {
+            send(message);
+        }
         transferToMainServer();
     }
 
@@ -225,31 +280,66 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             return;
         }
         cancelTasks();
+        cancelTransferWatchdog();
         proxyPlayer.disconnect(Component.text(message));
     }
 
     /**
-     * 校验登录码。校验可能跨越一次 {@code /hydwind reload}，因此本次操作的
-     * flow、网站客户端、重启触发器与成功/失败文案全部取自同一个当前代际快照。
+     * 校验登录码。运行在专用虚拟线程上：这里只做 HTTP 与状态机推进，
+     * 发消息、转服、断开等平台动作回到 Velocity 调度线程执行。
+     *
+     * <p>校验可能跨越一次 {@code /hydwind reload}，因此本次操作的 flow、
+     * 网站客户端、重启触发器与成功/失败文案全部取自同一个当前代际快照。</p>
      */
     private void verify(long verificationId, String code) {
         if (closed.get()) {
             return;
         }
 
-        RuntimeSnapshot runtime = runtime();
-        LoginFlow activeFlow = new LoginFlow(
-                sessionStore, runtime.websiteClient(), runtime.messages(), clock);
-        VerifyOutcome outcome = activeFlow.verify(identity, verificationId, code);
+        RuntimeSnapshot runtime;
+        VerifyOutcome outcome;
+        try {
+            runtime = runtime();
+            LoginFlow activeFlow = new LoginFlow(
+                    sessionStore, runtime.websiteClient(), runtime.messages(), clock);
+            outcome = activeFlow.verify(identity, verificationId, code);
+        } catch (RuntimeException exception) {
+            // WebsiteClient 已把网络异常映射成结果；这里兜住状态机或装配异常，
+            // 不让虚拟线程静默死掉。
+            logger.error("Website verification failed for player {}; keeping session PENDING.",
+                    gameId, exception);
+            sessionStore.authenticationFailed(
+                    uuid, connectionId, verificationId, clock.instant());
+            return;
+        }
+
         if (outcome.status() == VerifyResult.Status.UNAUTHORIZED) {
             logger.warn("Website rejected the plugin token (401); check website.token / HYDWIND_PLUGIN_TOKEN.");
         } else if (outcome.status() == VerifyResult.Status.CONTRACT_MISMATCH) {
             logger.warn("Website verify response does not match the plugin contract (player {}); check website/plugin versions.",
                     gameId);
         }
+
+        try {
+            server.getScheduler()
+                    .buildTask(plugin, () -> applyVerifyOutcome(outcome, runtime))
+                    .schedule();
+        } catch (RuntimeException exception) {
+            // 插件正在关闭，调度器拒绝任务；此时没有需要通知的在线玩家。
+            logger.debug("Could not schedule verify result for player {}: {}", gameId,
+                    exception.toString());
+        }
+    }
+
+    private void applyVerifyOutcome(VerifyOutcome outcome, RuntimeSnapshot runtime) {
+        if (closed.get()) {
+            return;
+        }
         if (outcome.authenticated()) {
-            authenticated.set(true);
-            cancelTasks();
+            // 管理员可能已经并发放行；只让第一个结果发起转服。
+            if (!authenticated.compareAndSet(false, true)) {
+                return;
+            }
             send(outcome.message());
             transferToMainServer();
             return;
@@ -258,11 +348,10 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (!outcome.message().isEmpty()) {
             send(outcome.message());
         }
-        if (outcome.triggerRestart() && !closed.get()) {
-            // 健康检查与写文件可能耗时，放到调度线程，避免阻塞 Limbo 线程。
-            server.getScheduler()
-                    .buildTask(plugin, runtime.restartTrigger()::onUnreachable)
-                    .schedule();
+        if (outcome.triggerRestart()) {
+            if (!plugin.submitWebsiteTask(runtime.restartTrigger()::onUnreachable)) {
+                logger.debug("Restart trigger skipped: website request slots are full.");
+            }
         }
     }
 
@@ -270,6 +359,20 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (closed.get()) {
             return;
         }
+        LimboPlayer player = limboPlayer;
+        if (player == null) {
+            // onSpawn 还没拿到 LimboPlayer（例如管理员在 spawn 前放行）。
+            // onSpawn 会再调用一次；这里不能提前占用 transferStarted。
+            return;
+        }
+        if (!transferStarted.compareAndSet(false, true)) {
+            return;
+        }
+
+        // 认证成功到真正离开 limbo 之间可能静默失败：保留一个看门狗，
+        // 避免玩家收到成功文案后永久留在已认证的 limbo 里。
+        scheduleTransferWatchdog(player);
+
         RuntimeSnapshot runtime = runtime();
         String mainServer = runtime.config().mainServer();
         Messages activeMessages = runtime.messages();
@@ -280,24 +383,81 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             proxyPlayer.disconnect(Component.text(activeMessages.serviceMisconfigured()));
             return;
         }
-        LimboPlayer player = limboPlayer;
-        if (player == null) {
+        try {
+            player.disconnect(target.get());
+        } catch (RuntimeException exception) {
+            // LimboAPI 在关闭/连接状态异常时可能抛错；不要把玩家留在 limbo。
+            logger.error("Failed to transfer player {} to server '{}'; disconnecting.",
+                    gameId, mainServer, exception);
+            closed.set(true);
+            cancelTasks();
+            proxyPlayer.disconnect(Component.text(activeMessages.serviceMisconfigured()));
+        }
+    }
+
+    private void scheduleTransferWatchdog(LimboPlayer player) {
+        ScheduledFuture<?> prompt = promptTask;
+        if (prompt != null) {
+            prompt.cancel(false);
+        }
+        ScheduledFuture<?> timeout = timeoutTask;
+        if (timeout != null) {
+            timeout.cancel(false);
+        }
+        cancelTransferWatchdog();
+        try {
+            transferWatchdogTask = player.getScheduledExecutor().schedule(
+                    this::transferWatchdog,
+                    TRANSFER_WATCHDOG_SECONDS, TimeUnit.SECONDS);
+        } catch (RuntimeException exception) {
+            // 玩家连接已关闭时调度会失败；断开事件自会清理 handler。
+            logger.debug("Could not schedule transfer watchdog for player {}: {}",
+                    gameId, exception.toString());
+        }
+    }
+
+    private void transferWatchdog() {
+        if (closed.get()) {
             return;
         }
-        player.disconnect(target.get());
+        // 转服成功但 onDisconnect 尚未回调时，玩家已经连到后端；不能把他从主服踢掉。
+        if (proxyPlayer.getCurrentServer().isPresent()) {
+            return;
+        }
+        logger.error("Player {} did not leave limbo within {}s after authentication; disconnecting.",
+                gameId, TRANSFER_WATCHDOG_SECONDS);
+        closed.set(true);
+        cancelTasks();
+        cancelTransferWatchdog();
+        String message;
+        try {
+            message = runtime().messages().serviceMisconfigured();
+        } catch (IllegalStateException runtimeGone) {
+            message = me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured();
+        }
+        proxyPlayer.disconnect(Component.text(message));
     }
 
     private void timeOut() {
         if (closed.get() || authenticated.get()) {
             return;
         }
-        // 超时可能由 reload 前排下的任务触发；文案仍取触发时的当前代际。
+        // 会话已被其它路径删除（例如旧连接的迟到断线事件）：handler 不能继续
+        // 空转，按超时断开，否则提示任务会一直刷新到玩家手动退出。
         RuntimeSnapshot runtime = runtime();
         Messages messages = runtime.messages();
+        if (sessionStore.find(uuid).isEmpty()) {
+            closed.set(true);
+            cancelTasks();
+            proxyPlayer.disconnect(Component.text(messages.sessionTimeout()));
+            return;
+        }
+        // 超时可能由 reload 前排下的任务触发；文案仍取触发时的当前代际。
         LoginFlow flow = new LoginFlow(sessionStore, runtime.websiteClient(), messages, clock);
         if (flow.timeout(identity)) {
             closed.set(true);
             cancelTasks();
+            cancelTransferWatchdog();
             proxyPlayer.disconnect(Component.text(messages.sessionTimeout()));
         }
     }
@@ -330,9 +490,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     }
 
     private boolean sessionAuthenticated() {
-        return sessionStore.find(uuid)
-                .map(LoginSession::isAuthenticated)
-                .orElse(false);
+        return sessionStore.isAuthenticated(uuid, connectionId);
     }
 
     /**
@@ -391,14 +549,23 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         // 顺序不能反过来——先 CAS 再复核，若管理员 approve/kick 插在中间，
         // 回滚 closed 会留下“会话已认证但 handler 仍拒绝转服”或
         // “玩家在线却已从两个登记表消失”的不可恢复状态。
-        if (!sessionStore.timeOut(uuid, clock.instant())) {
+        if (!sessionStore.timeOut(uuid, connectionId, clock.instant())) {
             return false;
         }
         if (!closed.compareAndSet(false, true)) {
             return false;
         }
         cancelTasks();
+        cancelTransferWatchdog();
         proxyPlayer.disconnect(Component.text(message));
         return true;
+    }
+
+    private void cancelTransferWatchdog() {
+        ScheduledFuture<?> watchdog = transferWatchdogTask;
+        if (watchdog != null) {
+            watchdog.cancel(false);
+            transferWatchdogTask = null;
+        }
     }
 }

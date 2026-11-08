@@ -1,6 +1,7 @@
 package me.hydwind.gate.command;
 
 import com.velocitypowered.api.command.CommandSource;
+import com.velocitypowered.api.proxy.Player;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -137,9 +138,11 @@ public final class AdminCommandExecutor {
             try {
                 // 重载本身由插件保证 synchronized；这里只负责调度与错误反馈。
                 reloadConfiguration.run();
+                plugin.logger().info("Admin {} reloaded the configuration.", sourceName(source));
                 send(source, admin.reloaded());
             } catch (RuntimeException exception) {
-                plugin.logger().error("Configuration reload failed.", exception);
+                plugin.logger().error("Configuration reload failed (requested by {}).",
+                        sourceName(source), exception);
                 send(source, Templates.fill(admin.reloadFailed(), "error",
                         exception.getMessage() == null ? exception.getClass().getSimpleName()
                                 : exception.getMessage()));
@@ -154,7 +157,10 @@ public final class AdminCommandExecutor {
         }
 
         // 放行的顺序不变量（先写会话、再转服）由 AdminActionService 维护。
-        sendResult(source, admin, actions.approve(playerName, admin.approvedPlayer()));
+        AdminResult result = actions.approve(playerName, admin.approvedPlayer());
+        plugin.logger().info("Admin {} approved '{}': {}",
+                sourceName(source), playerName, result.kind());
+        sendResult(source, admin, result);
     }
 
     private void kick(CommandSource source, AdminMessages admin, String playerName) {
@@ -164,7 +170,15 @@ public final class AdminCommandExecutor {
         }
 
         // 踢出的顺序不变量（先清会话、再断开连接）由 AdminActionService 维护。
-        sendResult(source, admin, actions.kick(playerName, admin.kickedPlayer()));
+        AdminResult result = actions.kick(playerName, admin.kickedPlayer());
+        plugin.logger().info("Admin {} kicked '{}': {}",
+                sourceName(source), playerName, result.kind());
+        sendResult(source, admin, result);
+    }
+
+    /** 审计日志里的操作者标识；不记录 IP，控制台操作统一记 console。 */
+    private static String sourceName(CommandSource source) {
+        return source instanceof Player player ? player.getUsername() : "console";
     }
 
     /**

@@ -1,8 +1,10 @@
 # HydwindGate 配置（Velocity 版）。
 # 修改后可通过 /hydwind reload 热重载；进行中的登录会话不会被中断。
 # 启动与重载时集中校验：
-# - 失败：website.base-url 为空、非法 URI 或非 http/https；超时 ≤ 0；无法解析的
-#   数值字符串；auth 三个时限 ≤ 0；restart 的冷却/窗口 ≤ 0 或 max-per-hour 为负。
+# - 失败：website.base-url 为空、非法 URI 或非 http/https；明文 HTTP 未显式
+#   允许（allow-insecure-http 默认 false）；超时 ≤ 0 或超过 60000；无法解析的
+#   数值字符串；auth 三个时限 ≤ 0 或超过上限；restart 的冷却/窗口 ≤ 0 或
+#   max-per-hour 为负。
 # - 回退默认：空白文本字段、字段缺失、数值字段为非数字非字符串类型。
 # - 只告警：畸形 limbo.spawn（使用默认出生点）。
 # 重载失败时保留当前配置。
@@ -14,7 +16,12 @@
 website:
   # 网站根地址，插件据此拼接 /gate、健康检查路径与 /api/plugin/login/verify。
   # 留空、非法 URI 或非 http/https 会导致启动或重载失败。
-  base-url: "http://103.236.99.253:62179"
+  # 生产环境必须用 https://；明文 HTTP 会让插件令牌和登录码经链路泄露。
+  # 换成实际域名后即可使用；临时 HTTP 环境把这里改成 http://IP:端口，并把
+  # allow-insecure-http 设为 true（启动会打印显著 WARN）。
+  base-url: "https://hydwind.example.com"
+  # 是否允许明文 HTTP。默认 false；只有本地/隔离网络或迁移期才显式开启。
+  allow-insecure-http: false
   # 网站插件令牌，与站务令牌分离。
   # 默认留空，用环境变量 HYDWIND_PLUGIN_TOKEN 注入（非空时优先于此处）。
   # 只有不使用环境变量时才填在这里，并确保该文件不被提交或共享。

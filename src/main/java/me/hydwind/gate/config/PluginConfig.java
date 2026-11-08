@@ -139,7 +139,8 @@ public record PluginConfig(
                         DEFAULT_CONNECT_TIMEOUT_MILLIS),
                 YamlMaps.intValue(websiteSection, "read-timeout-millis",
                         DEFAULT_READ_TIMEOUT_MILLIS),
-                YamlMaps.text(websiteSection, "health-path", DEFAULT_HEALTH_PATH));
+                YamlMaps.text(websiteSection, "health-path", DEFAULT_HEALTH_PATH),
+                YamlMaps.booleanValue(websiteSection, "allow-insecure-http", false));
 
         AuthSettings auth = new AuthSettings(
                 seconds(authSection, "login-timeout-seconds", DEFAULT_LOGIN_TIMEOUT),
@@ -182,7 +183,12 @@ public record PluginConfig(
 
     /** 读取秒数并转成 {@link Duration}；缺项或无法解析时用 {@code fallback}。 */
     private static Duration seconds(Map<String, Object> section, String key, Duration fallback) {
-        return Duration.ofSeconds(
-                YamlMaps.longValue(section, key, fallback.toSeconds()));
+        long seconds = YamlMaps.longValue(section, key, fallback.toSeconds());
+        try {
+            return Duration.ofSeconds(seconds);
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(
+                    "config value '" + key + "' is too large: " + seconds, exception);
+        }
     }
 }

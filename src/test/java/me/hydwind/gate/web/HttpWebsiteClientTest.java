@@ -305,6 +305,7 @@ class HttpWebsiteClientTest {
         PluginConfig config = PluginConfig.from(Map.<String, Object>of(
                 "website", Map.<String, Object>of(
                         "base-url", baseUrl + "/",
+                        "allow-insecure-http", true,
                         "token", "test-token",
                         "connect-timeout-millis", 300,
                         "read-timeout-millis", 300,
@@ -340,6 +341,7 @@ class HttpWebsiteClientTest {
         return PluginConfig.from(Map.<String, Object>of(
                 "website", Map.<String, Object>of(
                         "base-url", baseUrl,
+                        "allow-insecure-http", true,
                         "token", token,
                         "connect-timeout-millis", connectMillis,
                         "read-timeout-millis", readMillis)), null);

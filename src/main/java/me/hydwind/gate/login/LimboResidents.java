@@ -13,7 +13,7 @@ import java.util.UUID;
  */
 public interface LimboResidents {
 
-    /** 按游戏 ID（大小写不敏感）查找仍在 limbo 的玩家。 */
+    /** 按游戏 ID 精确查找仍在 limbo 的玩家；离线模式下大小写变体是不同账号。 */
     Optional<Resident> find(String gameId);
 
     /** 当前 limbo 中的全部玩家快照。 */

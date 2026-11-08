@@ -23,21 +23,17 @@ public final class LoginSessionStore {
 
     private final Map<UUID, LoginSession> sessions = new HashMap<>();
     /**
-     * 每个 UUID 已分配过的最大校验编号与最后使用时刻。单独存放、跨会话不重置，
-     * 这样旧连接迟到的校验结果不会命中重连后新建的会话。
-     *
-     * <p>条目在 {@link #expireGrace} 中按 {@link #VERIFICATION_ID_RETENTION} 回收，
-     * 避免长期运行的代理随独立玩家数无限增长。</p>
+     * 每个 UUID 当前有效的连接代际。旧连接的 DisconnectEvent 可能晚于新连接的
+     * join 到达；quit 必须带上连接代际，只有仍然匹配时才允许删除/标记会话。
      */
-    private final Map<UUID, VerificationCounter> lastVerificationIds = new HashMap<>();
-    /** 校验编号的保留时长：远大于任何登录会话/断线宽限，足够覆盖迟到结果。 */
-    private static final Duration VERIFICATION_ID_RETENTION = Duration.ofHours(24);
+    private final Map<UUID, Long> connectionIds = new HashMap<>();
+    private long nextConnectionId = 1L;
     /**
-     * 计数器条目的硬上限，防止未认证玩家用随机用户名刷登录码造成内存耗尽。
-     * 达到上限时先按保留时长回收；仍然超限则整体清空——这只可能让极少数
-     * 在途的迟到结果失效（fail-closed，玩家重试即可），不会放行未认证连接。
+     * 全局单调递增的校验编号。不按 UUID 保留计数器：全局编号天然不会回退，
+     * 旧连接迟到的结果永远命中不了重连后的新会话，也不会因为随机用户名把
+     * 内存撑大或触发“计数器满→全员无法登录”的可用性故障。
      */
-    private static final int MAX_VERIFICATION_COUNTERS = 100_000;
+    private long nextVerificationId = 1L;
     private volatile Duration reconnectGrace;
 
     public LoginSessionStore(Duration reconnectGrace) {
@@ -60,6 +56,18 @@ public final class LoginSessionStore {
      * 宽限恢复的会话和重复的在线进服事件都保留原 deadline，不因再次进服而延长登录窗口。
      */
     public synchronized LoginSession join(UUID uuid, String gameId, String ip, Instant now, Duration loginTimeout) {
+        return joinWithConnection(uuid, gameId, ip, now, loginTimeout).session();
+    }
+
+    /**
+     * 进服并返回本次连接的代际编号。
+     *
+     * <p>每次进服事件都分配新的 {@code connectionId}；断线事件必须带回同一个编号，
+     * 否则会被当成旧连接的迟到事件忽略。这样玩家快速重连时，旧连接的
+     * {@code DisconnectEvent} 不会删掉新会话。</p>
+     */
+    public synchronized JoinResult joinWithConnection(UUID uuid, String gameId, String ip,
+                                                       Instant now, Duration loginTimeout) {
         Objects.requireNonNull(uuid, "uuid");
         Objects.requireNonNull(gameId, "gameId");
         Objects.requireNonNull(ip, "ip");
@@ -67,23 +75,43 @@ public final class LoginSessionStore {
         Objects.requireNonNull(loginTimeout, "loginTimeout");
 
         LoginSession existing = sessions.get(uuid);
+        // 同一 UUID 仍有在线连接时，任何新连接都不能顶掉它：LimboAPI 在把
+        // 连接注册进 Velocity 之前就触发本事件，同名攻击者可以抢在受害者
+        // 前面 join，从而改写会话的 IP/连接代际。等旧连接真正断线
+        // （disconnectedAt != null）后，才允许宽限重连或重新登录。
+        if (existing != null && existing.disconnectedAt() == null
+                && existing.status() != LoginSession.Status.TIMED_OUT) {
+            return new JoinResult(existing, 0L, true);
+        }
+
+        long connectionId = nextConnectionId++;
+        connectionIds.put(uuid, connectionId);
+
         if (existing != null && existing.isAuthenticated()) {
             if (existing.disconnectedAt() == null && existing.matches(gameId, ip)) {
                 // 重复的进服事件：同一身份（游戏 ID + IP）才保持在线会话，仅刷新活动时间。
                 // 不同 IP 的同名连接不能直接继承认证，必须重新登录。
-                return update(existing.reconnectedAt(now));
+                return new JoinResult(update(existing.reconnectedAt(now)), connectionId);
             }
             if (withinGrace(existing, gameId, ip, now)) {
                 // 宽限恢复：沿用原 loginDeadline 与 verificationId。
-                return update(existing.reconnectedAt(now));
+                return new JoinResult(update(existing.reconnectedAt(now)), connectionId);
             }
         } else if (existing != null && existing.disconnectedAt() == null
                 && awaitingAuthentication(existing) && existing.matches(gameId, ip)) {
             // 未认证会话的重复进服事件：保持状态与截止时刻，避免靠重复进服延长登录窗口。
-            return update(existing.reconnectedAt(now));
+            return new JoinResult(update(existing.reconnectedAt(now)), connectionId);
         }
 
-        return update(LoginSession.pending(uuid, gameId, ip, now, now.plus(loginTimeout)));
+        return new JoinResult(update(LoginSession.pending(uuid, gameId, ip, now, now.plus(loginTimeout))),
+                connectionId);
+    }
+
+    /** 一次进服事件对应的会话与连接代际；rejected 表示另一个在线连接占用了该 UUID。 */
+    public record JoinResult(LoginSession session, long connectionId, boolean rejected) {
+        public JoinResult(LoginSession session, long connectionId) {
+            this(session, connectionId, false);
+        }
     }
 
     /**
@@ -92,23 +120,26 @@ public final class LoginSessionStore {
      * @return 本次校验编号；非 PENDING 状态返回 {@link OptionalLong#empty()}
      */
     public synchronized OptionalLong beginVerification(UUID uuid, Instant now) {
+        Long connectionId = connectionIds.get(uuid);
+        if (connectionId == null) return OptionalLong.empty();
+        return beginVerification(uuid, connectionId, now);
+    }
+
+    /**
+     * 只允许当前连接推进自己的会话。旧连接（或同名顶替连接）不能借受害者
+     * 的会话状态提交/验证登录码。
+     */
+    public synchronized OptionalLong beginVerification(UUID uuid, long connectionId, Instant now) {
         LoginSession session = sessions.get(uuid);
         if (session == null || session.status() != LoginSession.Status.PENDING) {
             return OptionalLong.empty();
         }
-        // 编号按 UUID 全局单调递增，不随会话重建而回到 1。
-        if (lastVerificationIds.size() >= MAX_VERIFICATION_COUNTERS) {
-            pruneVerificationCounters(now);
-            if (lastVerificationIds.size() >= MAX_VERIFICATION_COUNTERS) {
-                // 24 小时内出现超过上限的独立用户名：优先保住内存。
-                lastVerificationIds.clear();
-            }
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) {
+            return OptionalLong.empty();
         }
-        long verificationId = lastVerificationIds
-                .compute(uuid, (key, counter) -> counter == null
-                        ? new VerificationCounter(1L, now)
-                        : new VerificationCounter(counter.lastId() + 1, now))
-                .lastId();
+        // 全局单调递增：不随会话重建或 UUID 变化回退。
+        long verificationId = nextVerificationId++;
         sessions.put(uuid, session.transitionTo(LoginSession.Status.VERIFYING, now, verificationId));
         return OptionalLong.of(verificationId);
     }
@@ -118,6 +149,18 @@ public final class LoginSessionStore {
      * 只有校验编号匹配的结果才生效；迟到的旧结果、非 VERIFYING 状态一律拒绝。
      */
     public synchronized boolean authenticationSucceeded(UUID uuid, long verificationId, Instant now) {
+        Long connectionId = connectionIds.get(uuid);
+        if (connectionId == null) return false;
+        return authenticationSucceeded(uuid, connectionId, verificationId, now);
+    }
+
+    /** 成功结果必须属于当前连接；旧连接的迟到成功结果一律丢弃。 */
+    public synchronized boolean authenticationSucceeded(UUID uuid, long connectionId,
+                                                        long verificationId, Instant now) {
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) {
+            return false;
+        }
         LoginSession session = sessions.get(uuid);
         if (session == null || session.status() != LoginSession.Status.VERIFYING
                 || session.verificationId() != verificationId) {
@@ -138,6 +181,18 @@ public final class LoginSessionStore {
      * 只有校验编号匹配的结果才生效，迟到结果不会打断新的校验。
      */
     public synchronized boolean authenticationFailed(UUID uuid, long verificationId, Instant now) {
+        Long connectionId = connectionIds.get(uuid);
+        if (connectionId == null) return false;
+        return authenticationFailed(uuid, connectionId, verificationId, now);
+    }
+
+    /** 失败结果同样只归当前连接，迟到结果不能改写新连接的状态。 */
+    public synchronized boolean authenticationFailed(UUID uuid, long connectionId,
+                                                     long verificationId, Instant now) {
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) {
+            return false;
+        }
         LoginSession session = sessions.get(uuid);
         if (session == null || session.status() != LoginSession.Status.VERIFYING
                 || session.verificationId() != verificationId) {
@@ -157,7 +212,18 @@ public final class LoginSessionStore {
      * @return 调用方是否应断开该连接
      */
     public synchronized boolean timeOut(UUID uuid, Instant now) {
+        Long connectionId = connectionIds.get(uuid);
+        if (connectionId == null) return false;
+        return timeOut(uuid, connectionId, now);
+    }
+
+    /** 只有当前连接可以触发/消费自己会话的超时。 */
+    public synchronized boolean timeOut(UUID uuid, long connectionId, Instant now) {
         Objects.requireNonNull(now, "now");
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) {
+            return false;
+        }
         LoginSession session = sessions.get(uuid);
         if (session == null) {
             return false;
@@ -176,6 +242,26 @@ public final class LoginSessionStore {
      * 玩家退出。已认证会话保留下来作为断线宽限记录；未认证会话直接移除。
      */
     public synchronized void quit(UUID uuid, Instant now) {
+        quitInternal(uuid, now);
+        connectionIds.remove(uuid);
+    }
+
+    /**
+     * 带连接代际的退出。只有当前会话仍属于这条连接时才生效。
+     *
+     * <p>玩家在 limbo 掉线后立即重连时，新连接的 join 可能先到，旧连接迟到的
+     * DisconnectEvent 不能删除新会话。</p>
+     */
+    public synchronized void quit(UUID uuid, long connectionId, Instant now) {
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) {
+            return;
+        }
+        connectionIds.remove(uuid);
+        quitInternal(uuid, now);
+    }
+
+    private void quitInternal(UUID uuid, Instant now) {
         LoginSession session = sessions.get(uuid);
         if (session == null) {
             return;
@@ -233,17 +319,11 @@ public final class LoginSessionStore {
                     && disconnectedAt != null
                     && !now.isBefore(disconnectedAt.plus(reconnectGrace))) {
                 sessions.remove(session.uuid());
+                connectionIds.remove(session.uuid());
                 removed++;
             }
         }
-        // 校验编号只保留有限时长，避免长期运行的代理随独立玩家数无限增长。
-        pruneVerificationCounters(now);
         return removed;
-    }
-
-    private void pruneVerificationCounters(Instant now) {
-        Instant idCutoff = now.minus(VERIFICATION_ID_RETENTION);
-        lastVerificationIds.entrySet().removeIf(entry -> entry.getValue().updatedAt().isBefore(idCutoff));
     }
 
     public synchronized Optional<LoginSession> find(UUID uuid) {
@@ -260,6 +340,31 @@ public final class LoginSessionStore {
     public synchronized boolean isAuthenticated(UUID uuid) {
         LoginSession session = sessions.get(uuid);
         return session != null && session.isAuthenticated();
+    }
+
+    /** 只认当前连接的认证状态；ServerPreConnectEvent 和 limbo 放行使用这个版本。 */
+    public synchronized boolean isAuthenticated(UUID uuid, long connectionId) {
+        Long current = connectionIds.get(uuid);
+        if (current == null || current.longValue() != connectionId) return false;
+        LoginSession session = sessions.get(uuid);
+        return session != null && session.isAuthenticated();
+    }
+
+    /** 指定连接是否仍是该 UUID 的当前连接。 */
+    public synchronized boolean isCurrentConnection(UUID uuid, long connectionId) {
+        Long current = connectionIds.get(uuid);
+        return current != null && current.longValue() == connectionId;
+    }
+
+    /**
+     * 丢弃一个已失效的连接代际，但不改动会话本身。
+     * 用于 CONFLICTING_LOGIN 这类“连接已死、会话可能仍属于别人”的场景。
+     */
+    public synchronized void dropConnection(UUID uuid, long connectionId) {
+        Long current = connectionIds.get(uuid);
+        if (current != null && current.longValue() == connectionId) {
+            connectionIds.remove(uuid);
+        }
     }
 
     /**
@@ -312,10 +417,11 @@ public final class LoginSessionStore {
     /**
      * 管理员踢出：移除会话（含宽限记录）。
      *
-     * <p>刻意保留 {@code lastVerificationIds}：踢出后玩家重连会建立新会话，
-     * 校验编号必须继续递增，否则旧连接的迟到结果会命中新会话。</p>
+     * <p>校验编号是全局单调递增的，踢出后玩家重连建立的新会话也不会复用旧编号，
+     * 旧连接的迟到结果无法命中新会话。</p>
      */
     public synchronized boolean remove(UUID uuid) {
+        connectionIds.remove(uuid);
         return sessions.remove(uuid) != null;
     }
 
@@ -329,7 +435,9 @@ public final class LoginSessionStore {
      */
     public synchronized boolean removeIfSession(UUID uuid, LoginSession expected) {
         Objects.requireNonNull(expected, "expected");
-        return sessions.remove(uuid, expected);
+        boolean removed = sessions.remove(uuid, expected);
+        if (removed) connectionIds.remove(uuid);
+        return removed;
     }
 
     /**
@@ -341,7 +449,9 @@ public final class LoginSessionStore {
         if (session == null || session.status() != LoginSession.Status.TIMED_OUT) {
             return false;
         }
-        return sessions.remove(uuid) != null;
+        boolean removed = sessions.remove(uuid) != null;
+        if (removed) connectionIds.remove(uuid);
+        return removed;
     }
 
     /** 会话快照，供状态统计使用。 */
@@ -367,7 +477,4 @@ public final class LoginSessionStore {
                 && now.isBefore(disconnectedAt.plus(reconnectGrace));
     }
 
-    /** 每个 UUID 的校验编号计数器；带时间戳以便回收。 */
-    private record VerificationCounter(long lastId, Instant updatedAt) {
-    }
 }

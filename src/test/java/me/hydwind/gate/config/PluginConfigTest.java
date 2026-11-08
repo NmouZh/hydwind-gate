@@ -14,14 +14,14 @@ class PluginConfigTest {
     /** 合法的最小配置：窄设置要求 base-url 非空，缺了它就无法加载。 */
     private static Map<String, Object> minimalRoot() {
         return Map.<String, Object>of("website", Map.<String, Object>of(
-                "base-url", "http://example.test"));
+                "base-url", "https://example.test"));
     }
 
     @Test
     void readsWebsiteAuthLimboServerAndRestartSections() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test/",
+                        "base-url", "https://example.test/",
                         "token", "file-token",
                         "connect-timeout-millis", 1234,
                         "read-timeout-millis", 5678,
@@ -44,7 +44,7 @@ class PluginConfigTest {
         PluginConfig config = PluginConfig.from(root, null);
 
         // 旧扁平访问器保持向后兼容。
-        assertEquals("http://example.test/", config.websiteBaseUrl());
+        assertEquals("https://example.test/", config.websiteBaseUrl());
         assertEquals("file-token", config.pluginToken());
         assertEquals(1234, config.connectTimeoutMillis());
         assertEquals(5678, config.readTimeoutMillis());
@@ -66,7 +66,7 @@ class PluginConfigTest {
     void narrowViewsExposeTheSameValuesAsTheFlatAccessors() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test/",
+                        "base-url", "https://example.test/",
                         "token", "file-token",
                         "connect-timeout-millis", 1234,
                         "read-timeout-millis", 5678,
@@ -89,7 +89,7 @@ class PluginConfigTest {
         PluginConfig config = PluginConfig.from(root, null);
 
         assertEquals(new WebsiteSettings(
-                        "http://example.test/", "file-token", 1234, 5678, "health"),
+                        "https://example.test/", "file-token", 1234, 5678, "health", false),
                 config.website());
         assertEquals(new AuthSettings(
                         Duration.ofSeconds(120), Duration.ofSeconds(60), Duration.ofSeconds(5)),
@@ -104,7 +104,7 @@ class PluginConfigTest {
     void environmentTokenOverwritesFileTokenOnlyWhenNotBlank() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "token", "file-token"));
 
         assertEquals("env-token", PluginConfig.from(root, "  env-token  ").pluginToken());
@@ -116,7 +116,7 @@ class PluginConfigTest {
     void blankEnvironmentTokenFallsBackToFileToken() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "token", "file-token"));
 
         assertEquals("file-token", PluginConfig.from(root, "").pluginToken());
@@ -145,7 +145,7 @@ class PluginConfigTest {
     void numericStringsAndLegacyMaxPerWindowAliasAreAccepted() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "connect-timeout-millis", "1500",
                         "read-timeout-millis", "2500"),
                 "restart", Map.<String, Object>of(
@@ -163,7 +163,7 @@ class PluginConfigTest {
     @Test
     void maxPerHourWinsOverLegacyMaxPerWindowWhenBothArePresent() {
         Map<String, Object> root = Map.<String, Object>of(
-                "website", Map.<String, Object>of("base-url", "http://example.test"),
+                "website", Map.<String, Object>of("base-url", "https://example.test"),
                 "restart", Map.<String, Object>of(
                         "max-per-hour", 6,
                         "max-per-window", 4));
@@ -174,7 +174,7 @@ class PluginConfigTest {
     @Test
     void unparsableNumericStringsFailLoadingInsteadOfFallingBackToDefaults() {
         Map<String, Object> website = Map.of(
-                "base-url", "http://example.test",
+                "base-url", "https://example.test",
                 "connect-timeout-millis", "nope");
         IllegalArgumentException timeout = assertThrows(IllegalArgumentException.class,
                 () -> PluginConfig.from(Map.of("website", website), null));
@@ -184,14 +184,14 @@ class PluginConfigTest {
         Map<String, Object> auth = Map.of("prompt-interval-seconds", "abc");
         IllegalArgumentException interval = assertThrows(IllegalArgumentException.class,
                 () -> PluginConfig.from(Map.of(
-                        "website", Map.of("base-url", "http://example.test"),
+                        "website", Map.of("base-url", "https://example.test"),
                         "auth", auth), null));
         assertEquals("config value 'prompt-interval-seconds' is not a number: abc",
                 interval.getMessage());
 
         IllegalArgumentException loginTimeout = assertThrows(IllegalArgumentException.class,
                 () -> PluginConfig.from(Map.of(
-                        "website", Map.of("base-url", "http://example.test"),
+                        "website", Map.of("base-url", "https://example.test"),
                         "auth", Map.of("login-timeout-seconds", "600s")), null));
         assertTrue(loginTimeout.getMessage().contains("'login-timeout-seconds'"),
                 "600s 之类的时长写法必须在加载时报错，而不是变成 300 秒");
@@ -201,7 +201,7 @@ class PluginConfigTest {
     void blankOptionalTextFallsBackToDefaults() {
         Map<String, Object> root = Map.<String, Object>of(
                 "website", Map.<String, Object>of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "health-path", "   "),
                 "admin", Map.<String, Object>of("permission", " "),
                 "limbo", Map.<String, Object>of("world", "", "spawn", "  "),
@@ -232,15 +232,15 @@ class PluginConfigTest {
     void nonPositiveWebsiteTimeoutsAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
                 Map.of("website", Map.of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "connect-timeout-millis", 0)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
                 Map.of("website", Map.of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "connect-timeout-millis", -1)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
                 Map.of("website", Map.of(
-                        "base-url", "http://example.test",
+                        "base-url", "https://example.test",
                         "read-timeout-millis", 0)), null),
                 "read-timeout-millis=0 以前会静默回退 3000，现在直接报错");
     }
@@ -248,28 +248,43 @@ class PluginConfigTest {
     @Test
     void nonPositiveAuthDurationsAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "auth", Map.of("login-timeout-seconds", 0)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "auth", Map.of("session-grace-seconds", -10)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "auth", Map.of("prompt-interval-seconds", 0)), null));
     }
 
     @Test
     void nonPositiveRestartValuesAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "restart", Map.of("cooldown-seconds", 0)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "restart", Map.of("window-seconds", -5)), null));
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "restart", Map.of("max-per-hour", -3)), null),
                 "负的重启上限以前按 0 处理，现在直接报错");
+    }
+
+    @Test
+    void httpBaseUrlRequiresExplicitOptIn() {
+        IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                () -> PluginConfig.from(Map.of("website",
+                        Map.of("base-url", "http://example.test")), null),
+                "默认必须拒绝明文 HTTP，避免插件令牌和登录码裸奔");
+        assertTrue(rejected.getMessage().contains("https"),
+                "错误信息应告诉配置者改用 https");
+
+        WebsiteSettings allowed = new WebsiteSettings(
+                "http://example.test", "token", 100, 100, "/api/health", true);
+        assertEquals("http://example.test", allowed.baseUrl(),
+                "内网/本地开发可显式开启明文 HTTP");
     }
 
     @Test
@@ -277,15 +292,15 @@ class PluginConfigTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new WebsiteSettings(" ", "token", 100, 100, "/api/health"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WebsiteSettings("http://example.test", "token", 0, 100, "/api/health"));
+                () -> new WebsiteSettings("https://example.test", "token", 0, 100, "/api/health"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WebsiteSettings("http://example.test", "token", 100, 0, "/api/health"));
+                () -> new WebsiteSettings("https://example.test", "token", 100, 0, "/api/health"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WebsiteSettings("http://example.test", "token", 100, 100, " "));
+                () -> new WebsiteSettings("https://example.test", "token", 100, 100, " "));
         assertThrows(NullPointerException.class,
                 () -> new WebsiteSettings(null, "token", 100, 100, "/api/health"));
         assertThrows(NullPointerException.class,
-                () -> new WebsiteSettings("http://example.test", null, 100, 100, "/api/health"));
+                () -> new WebsiteSettings("https://example.test", null, 100, 100, "/api/health"));
     }
 
     @Test
@@ -307,8 +322,8 @@ class PluginConfigTest {
                 "PluginConfig.from 也会在加载时失败");
 
         // 现有的本地回环地址必须继续通过。
-        assertEquals("http://127.0.0.1:1",
-                new WebsiteSettings("http://127.0.0.1:1", "token", 100, 100, "/api/health")
+        assertEquals("https://127.0.0.1:1",
+                new WebsiteSettings("https://127.0.0.1:1", "token", 100, 100, "/api/health")
                         .baseUrl());
         assertEquals("HTTPS://example.test",
                 new WebsiteSettings("HTTPS://example.test", "token", 100, 100, "/api/health")
@@ -342,7 +357,7 @@ class PluginConfigTest {
     @Test
     void pluginConfigConstructorOnlyChecksForNulls() {
         WebsiteSettings website =
-                new WebsiteSettings("http://example.test", "token", 100, 100, "/api/health");
+                new WebsiteSettings("https://example.test", "token", 100, 100, "/api/health");
         AuthSettings auth = new AuthSettings(
                 Duration.ofMinutes(5), Duration.ofMinutes(5), Duration.ofSeconds(10));
         LimboSettings limbo = new LimboSettings("hydwind_limbo", "0, 64, 0");
@@ -357,7 +372,7 @@ class PluginConfigTest {
         assertEquals(limbo, config.limbo());
         assertEquals(admin, config.admin());
         assertEquals(server, config.server());
-        assertEquals("http://example.test", config.websiteBaseUrl(), "旧访问器委托给窄设置");
+        assertEquals("https://example.test", config.websiteBaseUrl(), "旧访问器委托给窄设置");
 
         assertThrows(NullPointerException.class,
                 () -> new PluginConfig(null, auth, limbo, admin, server, RestartSettings.DEFAULT));
@@ -380,7 +395,7 @@ class PluginConfigTest {
     @Test
     void unparsableLegacyMaxPerWindowIsIgnoredWhenMaxPerHourIsValid() {
         Map<String, Object> root = Map.<String, Object>of(
-                "website", Map.<String, Object>of("base-url", "http://example.test"),
+                "website", Map.<String, Object>of("base-url", "https://example.test"),
                 "restart", Map.<String, Object>of(
                         "max-per-hour", 5,
                         "max-per-window", "2 次"));
@@ -394,7 +409,7 @@ class PluginConfigTest {
     @Test
     void validLegacyMaxPerWindowStillAppliesWhenMaxPerHourIsAbsent() {
         Map<String, Object> root = Map.<String, Object>of(
-                "website", Map.<String, Object>of("base-url", "http://example.test"),
+                "website", Map.<String, Object>of("base-url", "https://example.test"),
                 "restart", Map.<String, Object>of("max-per-window", 4));
 
         assertEquals(4, PluginConfig.from(root, null).restart().maxPerWindow(),
@@ -403,7 +418,7 @@ class PluginConfigTest {
         // 边界：旧别名是新键缺项时唯一的来源，无法解析时仍应按原语义让加载失败，
         // 而不是被惰性读取一并吞掉。
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http://example.test"),
+                Map.of("website", Map.of("base-url", "https://example.test"),
                         "restart", Map.of("max-per-window", "2 次")), null),
                 "没有合法的新键可依据时，无法解析的旧别名仍必须报错");
     }
@@ -441,8 +456,8 @@ class PluginConfigTest {
     @Test
     void websiteBaseUrlMustIncludeAHost() {
         IllegalArgumentException emptyAuthority = assertThrows(IllegalArgumentException.class,
-                () -> new WebsiteSettings("http:///", "token", 100, 100, "/api/health"),
-                "http:/// 语法合法但没有 host，必须在加载时拒绝");
+                () -> new WebsiteSettings("https:///", "token", 100, 100, "/api/health"),
+                "https:/// 语法合法但没有 host，必须在加载时拒绝");
         assertTrue(emptyAuthority.getMessage().contains("host"),
                 "错误信息应明确指出缺少 host");
 
@@ -456,7 +471,7 @@ class PluginConfigTest {
                 "带 host 与路径的 https 地址必须通过");
 
         assertThrows(IllegalArgumentException.class, () -> PluginConfig.from(
-                Map.of("website", Map.of("base-url", "http:///")), null),
+                Map.of("website", Map.of("base-url", "https:///")), null),
                 "PluginConfig.from 加载无 host 的 base-url 也必须失败");
     }
 }

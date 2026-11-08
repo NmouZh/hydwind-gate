@@ -6,6 +6,9 @@ import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.proxy.Player;
 import java.time.Clock;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import me.hydwind.gate.HydwindGatePlugin;
 import me.hydwind.gate.auth.LoginSession;
 import me.hydwind.gate.auth.LoginSessionStore;
@@ -32,6 +35,13 @@ public final class LoginGateListener {
     /** 会话存储与时钟在插件生命周期内不变，构造时缓存，避免事件处理里反复穿透插件对象。 */
     private final LoginSessionStore sessionStore;
     private final Clock clock;
+    /**
+     * 每条连接 → 进服时分配的代际编号。用 IdentityHashMap 按 Player 对象区分：
+     * 同名玩家快速重连时，旧连接和新连接是两个不同对象，旧连接迟到的断线事件
+     * 不会拿到新连接的编号。
+     */
+    private final Map<Player, Long> connectionIds =
+            Collections.synchronizedMap(new IdentityHashMap<>());
 
     public LoginGateListener(HydwindGatePlugin plugin,
                              LimboLoginService limboLoginService,
@@ -54,25 +64,37 @@ public final class LoginGateListener {
     public void onLoginLimboRegister(LoginLimboRegisterEvent event) {
         Player player = event.getPlayer();
         // loginTimeout 在这里固定进会话；之后热重载不会改变本会话的截止时刻。
-        LoginSession session = sessionStore.join(
+        LoginSessionStore.JoinResult joined = sessionStore.joinWithConnection(
                 player.getUniqueId(), player.getUsername(),
                 RemoteAddress.remoteIp(player.getRemoteAddress()), clock.instant(),
                 plugin.pluginConfig().loginTimeout());
+        LoginSession session = joined.session();
+        long connectionId = joined.connectionId();
+        if (joined.rejected()) {
+            // 同 UUID 还有在线连接，且游戏 ID/IP 不同：不把这个连接放进门禁流程。
+            event.addOnJoinCallback(() -> player.disconnect(Component.text(
+                    me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured())));
+            return;
+        }
+        connectionIds.put(player, connectionId);
 
         if (session.isAuthenticated()) {
             // 管理员在进 limbo 前已放行：不创建 session handler，直接按正常流程放行登录。
             // LimboAPI 要等事件处理完才建立登录队列；队列存在前 passLoginLimbo 是空操作，
             // 因此必须在 join callback（队列已就绪）里调用。
-            event.addOnJoinCallback(() -> limboLoginService.passLogin(player));
+            event.addOnJoinCallback(() -> passLogin(player, connectionId));
             return;
         }
-        event.addOnJoinCallback(() -> spawnInLimbo(player));
+        event.addOnJoinCallback(() -> spawnInLimbo(player, connectionId));
     }
 
     @Subscribe
     public void onServerPreConnect(ServerPreConnectEvent event) {
         // 唯一的放行判据在会话 Module 里；本 Adapter 只负责把拒绝转成事件结果。
-        if (!sessionStore.isAuthenticated(event.getPlayer().getUniqueId())) {
+        // 必须同时校验连接代际：同 UUID 的另一个连接不能借已认证会话进后端。
+        Long connectionId = connectionIds.get(event.getPlayer());
+        if (connectionId == null
+                || !sessionStore.isAuthenticated(event.getPlayer().getUniqueId(), connectionId)) {
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
         }
     }
@@ -83,10 +105,24 @@ public final class LoginGateListener {
         // 攻击者连接的 UUID。若照常 quit，任何未认证的人都能用别人的名字连接一次
         // 就清掉对方的会话（PENDING 会被直接删除，玩家永久卡在 limbo）。
         // 被拒绝的连接从未建立过会话，这里必须忽略。
+        Player player = event.getPlayer();
+        Long connectionId = connectionIds.get(player);
         if (!shouldReleaseSession(event.getLoginStatus())) {
+            // 同名冲突事件可能携带的是被顶掉的那条连接；只有确认它还没进后端时
+            // 才丢弃它的连接代际，避免误伤正在主服的目标玩家。
+            if (connectionId != null && player.getCurrentServer().isEmpty()) {
+                connectionIds.remove(player);
+                sessionStore.dropConnection(player.getUniqueId(), connectionId);
+            }
             return;
         }
-        sessionStore.quit(event.getPlayer().getUniqueId(), clock.instant());
+        connectionId = connectionIds.remove(player);
+        if (connectionId == null) {
+            // 从未由本监听器建立过连接代际（例如进 limbo 之前就被代理拒绝），
+            // 不能拿 UUID 去删别的连接留下的会话。
+            return;
+        }
+        sessionStore.quit(player.getUniqueId(), connectionId, clock.instant());
     }
 
     /**
@@ -100,20 +136,38 @@ public final class LoginGateListener {
         return status != DisconnectEvent.LoginStatus.CONFLICTING_LOGIN;
     }
 
-    private void spawnInLimbo(Player player) {
+    private void spawnInLimbo(Player player, long connectionId) {
         try {
-            limboLoginService.spawnInLimbo(player);
+            limboLoginService.spawnInLimbo(player, connectionId);
         } catch (RuntimeException exception) {
             logger.error("Failed to spawn player {} into limbo; denying access.", player.getUsername(), exception);
-            sessionStore.quit(player.getUniqueId(), clock.instant());
-            // 关闭过程中运行时代际可能已释放；此时不能用 plugin.messages()（会抛异常）。
-            String reason;
-            try {
-                reason = plugin.messages().serviceMisconfigured();
-            } catch (IllegalStateException runtimeGone) {
-                reason = me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured();
-            }
-            player.disconnect(Component.text(reason));
+            failOpenConnection(player, connectionId);
         }
+    }
+
+    /**
+     * 宽限内直接放行也可能在 LimboAPI 关闭/异常时抛错。没有兜底的话，
+     * 玩家会收到成功之外的空状态，而会话仍是 AUTHENTICATED。
+     */
+    private void passLogin(Player player, long connectionId) {
+        try {
+            limboLoginService.passLogin(player);
+        } catch (RuntimeException exception) {
+            logger.error("Failed to pass player {} through limbo; denying access.", player.getUsername(), exception);
+            failOpenConnection(player, connectionId);
+        }
+    }
+
+    private void failOpenConnection(Player player, long connectionId) {
+        connectionIds.remove(player);
+        sessionStore.quit(player.getUniqueId(), connectionId, clock.instant());
+        // 关闭过程中运行时代际可能已释放；此时不能用 plugin.messages()（会抛异常）。
+        String reason;
+        try {
+            reason = plugin.messages().serviceMisconfigured();
+        } catch (IllegalStateException runtimeGone) {
+            reason = me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured();
+        }
+        player.disconnect(Component.text(reason));
     }
 }

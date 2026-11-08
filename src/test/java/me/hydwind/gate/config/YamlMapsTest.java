@@ -95,5 +95,28 @@ class YamlMapsTest {
 
         assertEquals(Integer.MAX_VALUE, YamlMaps.intValue(section, "too-large", 0));
         assertEquals(-5, YamlMaps.intValue(section, "negative", 0));
+        assertEquals(Integer.MIN_VALUE,
+                YamlMaps.intValue(Map.of("too-small", Long.MIN_VALUE), "too-small", 0),
+                "低于 int 下限要饱和，不能强转成正数");
+        assertThrows(IllegalArgumentException.class,
+                () -> YamlMaps.longValue(
+                        Map.of("big", new java.math.BigInteger("18446744073709551616")),
+                        "big", 0L),
+                "超出 long 的 YAML 整数不能截断成低位");
+    }
+
+    @Test
+    void booleanValueAcceptsBooleanAndStringFormsOnly() {
+        Map<String, Object> section = Map.of(
+                "yes", true,
+                "text-true", " TRUE ",
+                "text-false", "false");
+
+        assertTrue(YamlMaps.booleanValue(section, "yes", false));
+        assertTrue(YamlMaps.booleanValue(section, "text-true", false));
+        assertTrue(!YamlMaps.booleanValue(section, "text-false", true));
+        assertTrue(!YamlMaps.booleanValue(section, "missing", false));
+        assertThrows(IllegalArgumentException.class,
+                () -> YamlMaps.booleanValue(Map.of("bad", "yes-please"), "bad", false));
     }
 }

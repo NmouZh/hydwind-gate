@@ -45,6 +45,7 @@ class HttpWebsiteClientCloseTest {
                 PluginConfig.from(Map.<String, Object>of(
                         "website", Map.<String, Object>of(
                                 "base-url", "http://127.0.0.1:1",
+                                "allow-insecure-http", true,
                                 "token", "test-token")), null));
         client.close();
         HealthResult health = client.health();
@@ -55,6 +56,7 @@ class HttpWebsiteClientCloseTest {
         return PluginConfig.from(Map.<String, Object>of(
                 "website", Map.<String, Object>of(
                         "base-url", baseUrl,
+                        "allow-insecure-http", true,
                         "token", "test-token",
                         "connect-timeout-millis", 300,
                         "read-timeout-millis", 300)), null);

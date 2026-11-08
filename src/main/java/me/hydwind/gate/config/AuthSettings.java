@@ -12,18 +12,26 @@ import java.util.Objects;
  */
 public record AuthSettings(Duration loginTimeout, Duration reconnectGrace, Duration promptInterval) {
 
+    /** 上限：超出后 Duration 运算和玩家等待都没有实际意义。 */
+    private static final Duration MAX_LOGIN_TIMEOUT = Duration.ofHours(1);
+    private static final Duration MAX_RECONNECT_GRACE = Duration.ofDays(1);
+    private static final Duration MAX_PROMPT_INTERVAL = Duration.ofHours(1);
+
     public AuthSettings {
         Objects.requireNonNull(loginTimeout, "loginTimeout");
         Objects.requireNonNull(reconnectGrace, "reconnectGrace");
         Objects.requireNonNull(promptInterval, "promptInterval");
-        requirePositive(loginTimeout, "auth.login-timeout-seconds");
-        requirePositive(reconnectGrace, "auth.session-grace-seconds");
-        requirePositive(promptInterval, "auth.prompt-interval-seconds");
+        requireRange(loginTimeout, "auth.login-timeout-seconds", MAX_LOGIN_TIMEOUT);
+        requireRange(reconnectGrace, "auth.session-grace-seconds", MAX_RECONNECT_GRACE);
+        requireRange(promptInterval, "auth.prompt-interval-seconds", MAX_PROMPT_INTERVAL);
     }
 
-    private static void requirePositive(Duration value, String name) {
+    private static void requireRange(Duration value, String name, Duration max) {
         if (value.isNegative() || value.isZero()) {
             throw new IllegalArgumentException(name + " must be positive");
+        }
+        if (value.compareTo(max) > 0) {
+            throw new IllegalArgumentException(name + " must not exceed " + max.toSeconds() + " seconds");
         }
     }
 }

@@ -168,7 +168,9 @@ class RuntimeHolderTest {
     }
 
     private static PluginConfig config() {
-        return PluginConfig.from(Map.of("website", Map.of("base-url", "http://127.0.0.1:1")), null);
+        return PluginConfig.from(Map.of("website", Map.of(
+                "base-url", "http://127.0.0.1:1",
+                "allow-insecure-http", true)), null);
     }
 
     /** 假网站客户端：只记录 close 次数，其余操作返回固定结果。 */
