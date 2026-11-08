@@ -72,6 +72,8 @@ public final class RestartTrigger {
             try {
                 health = websiteClient.health();
             } catch (RuntimeException exception) {
+                // 探活自身异常不算一次有效探测：不占用限频窗口，下一次失败可以立刻重试。
+                lastProbeAt = Instant.MIN;
                 logger.warn("网站健康检查异常，跳过重启: {}", exception.toString());
                 return;
             }
@@ -124,8 +126,9 @@ public final class RestartTrigger {
         Files.createDirectories(parent);
         Path tmp = Files.createTempFile(parent, ".restart-request-", ".tmp");
         try {
+            // createTempFile 已经创建了文件；这里只能截断写入，不能再 CREATE_NEW。
             Files.writeString(tmp, content, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             Files.move(tmp, requestFile,
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally {
