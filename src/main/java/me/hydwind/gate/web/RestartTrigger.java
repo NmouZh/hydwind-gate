@@ -116,7 +116,8 @@ public final class RestartTrigger {
      *
      * <p>不直接往目标路径写：该目录对网站服务用户也可写，直接写会跟随预先
      * 放置的符号链接，把内容截断到 `velocity.toml` 或插件 jar 上。临时文件
-     * 用 {@code CREATE_NEW} 创建，替换时链接本身被替换掉，目标文件不会被跟随。</p>
+     * 由 {@link Files#createTempFile} 独占创建，替换时链接本身被替换掉，
+     * 目标文件不会被跟随。</p>
      */
     private static void writeRequestFile(Path requestFile, String content) throws IOException {
         Path parent = requestFile.getParent();

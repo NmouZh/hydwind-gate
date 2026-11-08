@@ -107,6 +107,7 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - **主服名必须存在**：`server.main` 与 `velocity.toml` 的 `servers` 键一致；认证成功但服务器名不存在时，玩家会被断开并记录错误日志。
 - **会话只在内存**：认证会话与断线宽限不会持久化；代理重启后所有玩家需要重新登录。
 - **limbo 配置需重启**：`/hydwind reload` 会热重载网站、消息、断线宽限、重启与权限配置；`auth.prompt-interval-seconds` / `auth.login-timeout-seconds` 只对之后进入 limbo 的会话生效。登录超时在会话创建时固定为截止时刻，reload 调大不会延长已进服玩家的超时；`limbo.world` / `limbo.spawn` 的改动只在日志告警，需重启代理生效。
+- **升级注意（HTTPS 默认）**：旧版 `config.yml` 没有 `allow-insecure-http`，如果 `base-url` 仍是 `http://`，升级后插件会拒绝启动并关闭代理（fail-closed）。先把网站切到 HTTPS，或临时加 `allow-insecure-http: true`。
 - **配置校验**：启动或 `/hydwind reload` 会集中校验配置。以下情况让启动或重载失败（重载失败时保留当前配置）：`website.base-url` 为空、非法 URI、非 http/https，或明文 HTTP 未显式设置 `website.allow-insecure-http: true`；`website.connect-timeout-millis` / `read-timeout-millis` ≤ 0 或超过 60000；无法解析的数值字符串；`auth` 三个时限 ≤ 0 或超过上限；`restart` 的冷却/窗口 ≤ 0 或 `max-per-hour` 为负。空白文本字段（`health-path`、`permission`、`limbo.world` / `limbo.spawn`、`server.main`、`restart.request-path`）、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只记录 WARN 并使用默认出生点。
 - **确认插件已启用（发布阻断项）**：每次启动后检查控制台出现 `HydwindGate ... enabled`。缺少 LimboAPI 或依赖加载失败时 Velocity 会拒绝加载本插件，代理仍会运行，但此时没有任何门禁。至少给 Velocity 的 systemd unit 加启动前检查：
   ```ini
@@ -186,7 +187,7 @@ requested-at=2026-11-07T12:34:56Z
 ```ini
 # /etc/systemd/system/hydwind-restart.path
 [Path]
-PathModified=/run/hydwind/restart-request
+PathChanged=/run/hydwind/restart-request
 
 [Install]
 WantedBy=multi-user.target
