@@ -6,6 +6,7 @@ import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
@@ -132,9 +133,11 @@ public final class RestartTrigger {
         try {
             // createTempFile 已经创建了文件；这里只能截断写入，不能再 CREATE_NEW。
             // NOFOLLOW_LINKS 防止临时文件在创建与打开之间被替换成符号链接。
-            try (SeekableByteChannel channel = Files.newByteChannel(tmp,
-                    Set.of(StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE),
-                    LinkOption.NOFOLLOW_LINKS)) {
+            Set<OpenOption> openOptions = Set.of(
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS);
+            try (SeekableByteChannel channel = Files.newByteChannel(tmp, openOptions)) {
                 channel.write(ByteBuffer.wrap(content.getBytes(StandardCharsets.UTF_8)));
             }
             Files.move(tmp, requestFile,
