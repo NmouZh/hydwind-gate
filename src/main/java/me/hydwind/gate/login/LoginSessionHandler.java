@@ -396,6 +396,10 @@ public final class LoginSessionHandler implements LimboSessionHandler {
         if (closed.get()) {
             return;
         }
+        // 转服成功但 onDisconnect 尚未回调时，玩家已经连到后端；不能把他从主服踢掉。
+        if (proxyPlayer.getCurrentServer().isPresent()) {
+            return;
+        }
         logger.error("Player {} did not leave limbo within {}s after authentication; disconnecting.",
                 gameId, TRANSFER_WATCHDOG_SECONDS);
         closed.set(true);
