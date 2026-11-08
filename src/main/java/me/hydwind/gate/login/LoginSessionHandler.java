@@ -530,6 +530,7 @@ public final class LoginSessionHandler implements LimboSessionHandler {
     public void shutdown() {
         closed.set(true);
         cancelTasks();
+        cancelTransferWatchdog();
     }
 
     /**
