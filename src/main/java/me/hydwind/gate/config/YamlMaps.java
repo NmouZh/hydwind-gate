@@ -64,6 +64,26 @@ public final class YamlMaps {
     }
 
     public static int intValue(Map<String, Object> section, String key, int fallback) {
-        return (int) Math.min(Integer.MAX_VALUE, longValue(section, key, fallback));
+        long value = longValue(section, key, fallback);
+        // 直接强转会溢出：-3000000000 会变成 1294967296，绕过下游的 >0 校验。
+        if (value > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        if (value < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+        return (int) value;
+    }
+
+    /** 布尔值；字符串只接受 true/false（忽略大小写），其它写法视为配置错误。 */
+    public static boolean booleanValue(Map<String, Object> section, String key, boolean fallback) {
+        Object value = section.get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String string) {
+            String normalized = string.trim();
+            if (normalized.equalsIgnoreCase("true")) return true;
+            if (normalized.equalsIgnoreCase("false")) return false;
+            throw new IllegalArgumentException(
+                    "config value '" + key + "' is not a boolean: " + value);
+        }
+        return fallback;
     }
 }

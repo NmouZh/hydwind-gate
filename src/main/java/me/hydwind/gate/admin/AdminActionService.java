@@ -55,6 +55,16 @@ public final class AdminActionService {
             return new AdminResult(AdminResult.Kind.NOT_FOUND, playerName);
         }
         if (session.filter(LoginSession::isAuthenticated).isPresent()) {
+            // 已认证但仍留在 limbo（上次转服静默失败、或 approve 发生在 spawn 前）：
+            // 再调一次 limbo 侧放行，让 handler 重试转服，不把管理员堵在
+            // “已经通过认证”上只能踢人。
+            if (resident.isPresent()) {
+                boolean stillInLimbo = residents.approve(resident.get().uuid(), message);
+                return new AdminResult(stillInLimbo
+                        ? AdminResult.Kind.APPROVED_IN_LIMBO
+                        : AdminResult.Kind.ALREADY_AUTHENTICATED,
+                        session.get().gameId());
+            }
             return new AdminResult(AdminResult.Kind.ALREADY_AUTHENTICATED, session.get().gameId());
         }
         // 已超时的会话正在被 sweep/per-player 定时器断开；放行不成立。

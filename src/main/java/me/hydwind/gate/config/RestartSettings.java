@@ -20,18 +20,28 @@ public record RestartSettings(Path requestFile, Duration cooldown, Duration wind
             Duration.ofHours(1),
             2);
 
+    private static final Duration MAX_COOLDOWN = Duration.ofDays(1);
+    private static final Duration MAX_WINDOW = Duration.ofDays(1);
+    private static final int MAX_PER_WINDOW = 100;
+
     public RestartSettings {
         Objects.requireNonNull(requestFile, "requestFile");
         Objects.requireNonNull(cooldown, "cooldown");
         Objects.requireNonNull(window, "window");
-        if (cooldown.isNegative() || cooldown.isZero()) {
-            throw new IllegalArgumentException("cooldown must be positive");
+        if (requestFile.toString().isBlank()) {
+            throw new IllegalArgumentException("restart.request-path must not be blank");
         }
-        if (window.isNegative() || window.isZero()) {
-            throw new IllegalArgumentException("window must be positive");
+        if (cooldown.isNegative() || cooldown.isZero() || cooldown.compareTo(MAX_COOLDOWN) > 0) {
+            throw new IllegalArgumentException(
+                    "restart.cooldown-seconds must be between 1 and " + MAX_COOLDOWN.toSeconds());
         }
-        if (maxPerWindow < 0) {
-            throw new IllegalArgumentException("maxPerWindow must not be negative");
+        if (window.isNegative() || window.isZero() || window.compareTo(MAX_WINDOW) > 0) {
+            throw new IllegalArgumentException(
+                    "restart.window-seconds must be between 1 and " + MAX_WINDOW.toSeconds());
+        }
+        if (maxPerWindow < 0 || maxPerWindow > MAX_PER_WINDOW) {
+            throw new IllegalArgumentException(
+                    "restart.max-per-hour must be between 0 and " + MAX_PER_WINDOW);
         }
     }
 }

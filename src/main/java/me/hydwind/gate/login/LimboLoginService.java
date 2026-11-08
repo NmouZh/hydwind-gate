@@ -122,6 +122,12 @@ public final class LimboLoginService implements LimboResidents {
             return;
         }
         residents.put(handler.uuid(), handler);
+        // put 之后再检查一次：shutdown 可能在上面的 closed 读取之后、
+        // put 之前完成快照和清空，若不再检查，这个 handler 会落进已关闭的服务，
+        // 提示与超时任务永远不会被取消。
+        if (closed && residents.remove(handler.uuid(), handler)) {
+            handler.shutdown();
+        }
     }
 
     /**

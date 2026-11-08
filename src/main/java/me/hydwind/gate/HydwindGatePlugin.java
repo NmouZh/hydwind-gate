@@ -24,6 +24,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import me.hydwind.gate.admin.AdminActionService;
 import me.hydwind.gate.auth.LoginSession;
@@ -78,6 +82,8 @@ public final class HydwindGatePlugin {
     private static final String CONFIG_FILE = "config.yml";
     /** 清理过期断线宽限记录的间隔。 */
     private static final long SESSION_SWEEP_SECONDS = 60L;
+    /** 同时进行的网站请求上限；网站故障时避免未认证玩家把线程和连接耗光。 */
+    private static final int MAX_CONCURRENT_WEBSITE_REQUESTS = 8;
 
     private final Clock clock = Clock.systemUTC();
     private final ProxyServer server;
@@ -85,6 +91,14 @@ public final class HydwindGatePlugin {
     private final Path dataDirectory;
     /** 运行时代际；配置、文案、网站客户端与重启触发器整代替换。 */
     private final RuntimeHolder runtimeHolder = new RuntimeHolder();
+    /**
+     * 网站请求专用执行器：Velocity 调度池是共享线程池，不能承载最多 8 秒的阻塞 I/O。
+     * 虚拟线程适合阻塞等待；信号量限制并发，网站挂掉时也不会无限堆积。
+     */
+    private final ExecutorService websiteExecutor =
+            Executors.newVirtualThreadPerTaskExecutor();
+    private final Semaphore websiteRequestSlots =
+            new Semaphore(MAX_CONCURRENT_WEBSITE_REQUESTS);
 
     // 以下两项跨代际保留：会话不能因 reload 丢失，重启冷却与计数也不能被 reload 重置。
     private LoginSessionStore sessionStore;
@@ -166,6 +180,7 @@ public final class HydwindGatePlugin {
             limboLoginService.shutdown();
         }
         runtimeHolder.close();
+        websiteExecutor.shutdownNow();
         logger.info("HydwindGate disabled.");
     }
 
@@ -225,6 +240,16 @@ public final class HydwindGatePlugin {
      * per-player 定时任务），再清理超过断线宽限的认证记录。
      */
     private void expireDisconnectedSessions() {
+        // ScheduledExecutorService 在周期任务抛出异常后会停止后续执行；
+        // sweep 是超时兜底，不能让一次 disconnect 异常把它永久停掉。
+        try {
+            sweepSessions();
+        } catch (RuntimeException exception) {
+            logger.error("Session sweep failed; the next run will continue.", exception);
+        }
+    }
+
+    private void sweepSessions() {
         Instant now = clock.instant();
         List<LoginSession> timedOut = sessionStore.timeOutAll(now);
         if (!timedOut.isEmpty()) {
@@ -240,10 +265,16 @@ public final class HydwindGatePlugin {
                 return;
             }
             for (LoginSession session : timedOut) {
-                if (!limboLoginService.timeOut(session.uuid(), message)) {
-                    // 不在 limbo 时只需清掉过期会话；用状态比较避免删掉玩家在
-                    // timeOutAll 之后重连建立的崭新会话。
-                    sessionStore.removeIfTimedOut(session.uuid());
+                try {
+                    if (!limboLoginService.timeOut(session.uuid(), message)) {
+                        // 不在 limbo 时只需清掉过期会话；用状态比较避免删掉玩家在
+                        // timeOutAll 之后重连建立的崭新会话。
+                        sessionStore.removeIfTimedOut(session.uuid());
+                    }
+                } catch (RuntimeException exception) {
+                    // 单个玩家的断开异常不能中断其余会话的清理。
+                    logger.warn("Failed to time out session for player {}: {}",
+                            session.gameId(), exception.toString());
                 }
             }
         }
@@ -282,6 +313,13 @@ public final class HydwindGatePlugin {
         if (config.pluginToken().isBlank()) {
             logger.warn("website.token is blank and {} is not set; website verification will fail with 401.",
                     PluginConfig.TOKEN_ENV);
+        } else if (config.pluginToken().length() < 32) {
+            logger.warn("website.token is shorter than 32 characters; use a random token of at least 32.");
+        }
+        if (config.websiteBaseUrl().regionMatches(true, 0, "http://", 0, 7)) {
+            logger.warn("website.base-url uses plaintext HTTP. The plugin token and login codes are visible "
+                    + "to anyone on the network path; use HTTPS before opening the server to the public. "
+                    + "Set website.allow-insecure-http: false to reject HTTP at startup.");
         }
         // 自定义文案缺占位符时玩家会看到原样的 {xxx}；加载时提示管理员，但不改变替换行为。
         Messages.placeholderWarnings(raw).forEach((key, placeholders) ->
@@ -479,5 +517,32 @@ public final class HydwindGatePlugin {
 
     public AdminCommandExecutor adminCommandExecutor() {
         return adminCommandExecutor;
+    }
+
+    /**
+     * 提交一次网站请求到专用执行器。
+     *
+     * @return {@code false} 表示当前并发已满，调用方应立即给玩家一个可重试的提示，
+     *         而不是继续占用调度线程等待
+     */
+    public boolean submitWebsiteTask(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        if (!websiteRequestSlots.tryAcquire()) {
+            return false;
+        }
+        try {
+            websiteExecutor.execute(() -> {
+                try {
+                    task.run();
+                } finally {
+                    websiteRequestSlots.release();
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException exception) {
+            // 插件正在关闭：释放信号量并让调用方按“暂时不可用”处理。
+            websiteRequestSlots.release();
+            return false;
+        }
     }
 }

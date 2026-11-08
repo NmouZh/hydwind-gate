@@ -714,4 +714,23 @@ class LoginSessionStoreTest {
         assertTrue(store.removeIfSession(PLAYER, fresh), "当前会话匹配时应正常移除");
         assertTrue(store.find(PLAYER).isEmpty());
     }
+
+    @Test
+    void lateDisconnectFromOldConnectionDoesNotDeleteNewSession() {
+        LoginSessionStore store = newStore();
+        LoginSessionStore.JoinResult first =
+                store.joinWithConnection(PLAYER, "PlayerOne", IP, START, LOGIN_TIMEOUT);
+
+        // 玩家快速重连：新连接的 join 先到，旧连接的 DisconnectEvent 后到。
+        LoginSessionStore.JoinResult second = store.joinWithConnection(
+                PLAYER, "PlayerOne", IP, START.plusSeconds(1), LOGIN_TIMEOUT);
+        LoginSession fresh = second.session();
+
+        store.quit(PLAYER, first.connectionId(), START.plusSeconds(2));
+        assertEquals(fresh, store.find(PLAYER).orElseThrow(),
+                "旧连接的迟到断线事件不能删掉新会话");
+
+        store.quit(PLAYER, second.connectionId(), START.plusSeconds(3));
+        assertTrue(store.find(PLAYER).isEmpty(), "当前连接断线仍应正常清理未认证会话");
+    }
 }

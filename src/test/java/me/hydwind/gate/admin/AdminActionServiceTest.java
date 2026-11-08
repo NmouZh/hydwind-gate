@@ -109,16 +109,17 @@ class AdminActionServiceTest {
     }
 
     @Test
-    void approveAlreadyAuthenticatedDoesNotTouchLimbo() {
+    void approveAlreadyAuthenticatedRetriesLimboTransfer() {
         joinSession();
         assertTrue(sessions.forceAuthenticate(PLAYER, NOW));
         residents.add(PLAYER, NAME);
 
         AdminResult result = service.approve(NAME, MESSAGE);
 
-        assertEquals(AdminResult.Kind.ALREADY_AUTHENTICATED, result.kind());
+        assertEquals(AdminResult.Kind.APPROVED_IN_LIMBO, result.kind());
         assertEquals(NAME, result.playerName());
-        assertEquals(List.of(), residents.events);
+        assertEquals(List.of(approveEvent(PLAYER, true)), residents.events,
+                "已认证但仍卡在 limbo 时必须重试转服，而不是只回一句“已经认证”");
     }
 
     @Test

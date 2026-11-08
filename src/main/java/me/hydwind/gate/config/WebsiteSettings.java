@@ -1,6 +1,7 @@
 package me.hydwind.gate.config;
 
 import java.net.URI;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -14,13 +15,27 @@ import java.util.Objects;
  * @param connectTimeoutMillis 连接超时（毫秒），必须为正
  * @param readTimeoutMillis    读取超时（毫秒），必须为正
  * @param healthPath           健康检查路径，不能为空
+ * @param allowInsecureHttp    是否允许明文 HTTP；默认 false，仅内网/本地开发显式开启
  */
 public record WebsiteSettings(
         String baseUrl,
         String token,
         int connectTimeoutMillis,
         int readTimeoutMillis,
-        String healthPath) {
+        String healthPath,
+        boolean allowInsecureHttp) {
+
+    /** 超时上限：再长也不会等出结果，只会占住线程。 */
+    public static final int MAX_TIMEOUT_MILLIS = 60_000;
+
+    /**
+     * 兼容测试与旧调用点的 5 参数构造器：不启用 HTTPS 强制。
+     * 生产路径统一走 {@link PluginConfig#from(Map, String)} 的 6 参数构造。
+     */
+    WebsiteSettings(String baseUrl, String token, int connectTimeoutMillis,
+                    int readTimeoutMillis, String healthPath) {
+        this(baseUrl, token, connectTimeoutMillis, readTimeoutMillis, healthPath, true);
+    }
 
     public WebsiteSettings {
         Objects.requireNonNull(baseUrl, "baseUrl");
@@ -43,6 +58,20 @@ public record WebsiteSettings(
             throw new IllegalArgumentException(
                     "website.base-url must use http or https: " + baseUrl);
         }
+        if (scheme.equalsIgnoreCase("http") && !allowInsecureHttp) {
+            throw new IllegalArgumentException(
+                    "website.base-url must use https; set website.allow-insecure-http: true "
+                            + "only for local development or an isolated network");
+        }
+        // userinfo 会被启动日志原样打印，也可能被误当成认证信息；配置里不支持。
+        if (baseUri.getUserInfo() != null) {
+            throw new IllegalArgumentException(
+                    "website.base-url must not contain userinfo: " + baseUrl);
+        }
+        if (baseUri.getPort() > 65_535) {
+            throw new IllegalArgumentException(
+                    "website.base-url has an invalid port: " + baseUrl);
+        }
         // 客户端用字符串拼接追加 /api/... 路径；query 或 fragment 会把接口路径并进
         // query，导致所有请求都打到错误的 URL 上。路径本身是允许的。
         if (baseUri.getRawQuery() != null || baseUri.getRawFragment() != null) {
@@ -55,14 +84,20 @@ public record WebsiteSettings(
             throw new IllegalArgumentException(
                     "website.base-url must include a host: " + baseUrl);
         }
-        if (connectTimeoutMillis <= 0) {
-            throw new IllegalArgumentException("website.connect-timeout-millis must be positive");
+        if (connectTimeoutMillis <= 0 || connectTimeoutMillis > MAX_TIMEOUT_MILLIS) {
+            throw new IllegalArgumentException(
+                    "website.connect-timeout-millis must be between 1 and " + MAX_TIMEOUT_MILLIS);
         }
-        if (readTimeoutMillis <= 0) {
-            throw new IllegalArgumentException("website.read-timeout-millis must be positive");
+        if (readTimeoutMillis <= 0 || readTimeoutMillis > MAX_TIMEOUT_MILLIS) {
+            throw new IllegalArgumentException(
+                    "website.read-timeout-millis must be between 1 and " + MAX_TIMEOUT_MILLIS);
         }
         if (healthPath.isBlank()) {
             throw new IllegalArgumentException("website.health-path must not be blank");
+        }
+        if (healthPath.startsWith("//") || healthPath.contains("://")) {
+            throw new IllegalArgumentException(
+                    "website.health-path must be a path, not a URL: " + healthPath);
         }
     }
 }

@@ -56,7 +56,7 @@ CI 使用 Java 25（temurin）与 Gradle 9.7.0，执行 `gradle build`（包含 
 
 ```bash
 # 查看最近一次成功运行
-gh run list -R NmouZh/hydwind-gate --branch feat/velocity-gate --status success
+gh run list -R NmouZh/hydwind-gate --branch main --status success
 
 # 下载 artifact 到当前目录（解压后得到 HydwindGate-0.1.0.jar）
 gh run download <run-id> -R NmouZh/hydwind-gate -n hydwind-gate
@@ -107,8 +107,13 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 - **主服名必须存在**：`server.main` 与 `velocity.toml` 的 `servers` 键一致；认证成功但服务器名不存在时，玩家会被断开并记录错误日志。
 - **会话只在内存**：认证会话与断线宽限不会持久化；代理重启后所有玩家需要重新登录。
 - **limbo 配置需重启**：`/hydwind reload` 会热重载网站、消息、断线宽限、重启与权限配置；`auth.prompt-interval-seconds` / `auth.login-timeout-seconds` 只对之后进入 limbo 的会话生效。登录超时在会话创建时固定为截止时刻，reload 调大不会延长已进服玩家的超时；`limbo.world` / `limbo.spawn` 的改动只在日志告警，需重启代理生效。
-- **配置校验**：启动或 `/hydwind reload` 会集中校验配置。以下情况让启动或重载失败（重载失败时保留当前配置）：`website.base-url` 为空、非法 URI 或非 http/https；`website.connect-timeout-millis` / `read-timeout-millis` ≤ 0；无法解析的数值字符串；`auth` 三个时限 ≤ 0；`restart` 的冷却/窗口 ≤ 0 或 `max-per-hour` 为负。空白文本字段（`health-path`、`permission`、`limbo.world` / `limbo.spawn`、`server.main`、`restart.request-path`）、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只记录 WARN 并使用默认出生点。
-- **确认插件已启用**：每次启动后检查控制台出现 `HydwindGate ... enabled`。缺少 LimboAPI 时 Velocity 会拒绝加载本插件，代理仍会运行，但此时没有任何门禁；没有这行日志就必须先解决依赖再开放入口。
+- **配置校验**：启动或 `/hydwind reload` 会集中校验配置。以下情况让启动或重载失败（重载失败时保留当前配置）：`website.base-url` 为空、非法 URI、非 http/https，或明文 HTTP 未显式设置 `website.allow-insecure-http: true`；`website.connect-timeout-millis` / `read-timeout-millis` ≤ 0 或超过 60000；无法解析的数值字符串；`auth` 三个时限 ≤ 0 或超过上限；`restart` 的冷却/窗口 ≤ 0 或 `max-per-hour` 为负。空白文本字段（`health-path`、`permission`、`limbo.world` / `limbo.spawn`、`server.main`、`restart.request-path`）、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只记录 WARN 并使用默认出生点。
+- **确认插件已启用（发布阻断项）**：每次启动后检查控制台出现 `HydwindGate ... enabled`。缺少 LimboAPI 或依赖加载失败时 Velocity 会拒绝加载本插件，代理仍会运行，但此时没有任何门禁。至少给 Velocity 的 systemd unit 加启动前检查：
+  ```ini
+  ExecStartPre=/bin/test -s /opt/velocity/plugins/limboapi-1.2.0.jar
+  ExecStartPre=/bin/test -s /opt/velocity/plugins/HydwindGate-0.1.0.jar
+  ```
+  并在启动后确认 `enabled` 日志；进程存活不代表门禁存活。
 - **启动版本检查**：启用时检查 `proxy.getVersion()` 至少为 4.1.2，并读取 `limboapi` 插件的实际版本（最低 1.2.0）。Velocity 版本过低或 LimboAPI 已加载但版本过低时记录明确错误并关闭代理。
 - **不开放额外端口**：插件只通过 HTTP(S) 访问网站，不监听任何新端口。
 - **管理员权限**：`admin.permission`（默认 `hydwind.admin`）由外部权限插件授予；未授权执行 `/hydwind` 只会收到无权限提示。
@@ -119,7 +124,8 @@ echo "25582ebf5567fec1c20a03ad2c6e01fa05911a76749c67e7b0192acf508f7d31  plugins/
 
 ```yaml
 website:
-  base-url: "http://103.236.99.253:62179"  # 网站根地址
+  base-url: "https://hydwind.example.com"  # 网站根地址；生产必须 HTTPS
+  allow-insecure-http: false                # 仅本地/隔离网络设为 true
   token: ""                                 # 建议改用 HYDWIND_PLUGIN_TOKEN
   health-path: "/api/health"
   connect-timeout-millis: 3000
@@ -147,12 +153,13 @@ messages:
   # status-unverified 是 limbo 中显示的当前状态（默认「尚未认证」）。
 ```
 
-配置在启动与 `/hydwind reload` 时集中校验：`website.base-url` 为空/非法 URI、超时 ≤ 0、无法解析的数值字符串、`auth` 三个时限 ≤ 0、`restart` 数值非法会让启动或重载失败（重载失败时保留当前配置）；空白文本字段、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只告警并使用默认出生点。插件内部按 `website` / `auth` / `limbo` / `server` / `restart` / `admin` 分组提供窄配置视图。`auth.login-timeout-seconds` 在玩家进服时固化为会话截止时刻，reload 调大只影响之后进入 limbo 的会话。
+配置在启动与 `/hydwind reload` 时集中校验：`website.base-url` 为空/非法 URI/明文 HTTP 未显式允许、超时 ≤ 0 或超过 60000、无法解析的数值字符串、`auth` 三个时限 ≤ 0 或超过上限、`restart` 数值非法会让启动或重载失败（重载失败时保留当前配置）；空白文本字段、字段缺失、数值字段为非数字非字符串类型时回退默认值；畸形 `limbo.spawn` 只告警并使用默认出生点。插件内部按 `website` / `auth` / `limbo` / `server` / `restart` / `admin` 分组提供窄配置视图。`auth.login-timeout-seconds` 在玩家进服时固化为会话截止时刻，reload 调大只影响之后进入 limbo 的会话。
 
 ## 部署前必填项
 
 - [ ] 在网站配置 `PLUGIN_TOKEN`，并在代理进程设置环境变量 `HYDWIND_PLUGIN_TOKEN`（不要写进仓库）。
-- [ ] `website.base-url` 指向可访问的网站；正式开放前切换到 TLS。
+- [ ] `website.base-url` 指向可访问的 **HTTPS** 网站；没有 TLS 时只能显式设置
+  `website.allow-insecure-http: true` 作为临时环境，并接受令牌/登录码可被链路窃听的后果。
 - [ ] 安装 `limboapi-1.2.0.jar`（最低 1.2.0）；LimboAPI 与 Velocity 版本强绑定，升级 Velocity 前先确认兼容版本。
 - [ ] 启动后在控制台确认 `HydwindGate ... enabled`；没有这行说明插件未加载，门禁不存在。
 - [ ] 创建 `/run/hydwind` 且代理进程用户可写；或把 `restart.request-path` 改到可写路径。`/run` 是 tmpfs，手工创建会在宿主机重启后消失——用 systemd 的 `RuntimeDirectory=hydwind` 或 `/etc/tmpfiles.d/hydwind.conf` 持久化，并让代理用户与网站服务同组（见 `hydwind-web/deploy/README.md` 第 3 节）。
