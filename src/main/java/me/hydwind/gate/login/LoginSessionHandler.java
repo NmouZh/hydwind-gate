@@ -222,12 +222,14 @@ public final class LoginSessionHandler implements LimboSessionHandler {
             }
             case REJECTED -> {
                 // 只有仍在验证中才提示“正在验证”；超时/断线后的提交保持静默。
-                boolean verifying = sessionStore.find(uuid)
-                        .map(session -> session.status() == LoginSession.Status.VERIFYING)
-                        .orElse(false);
-                if (verifying) {
-                    send(messages.verifying());
-                }
+                // PENDING 被拒绝通常是验证并发/计数器已满，也给一个可重试提示。
+                sessionStore.find(uuid).ifPresent(session -> {
+                    if (session.status() == LoginSession.Status.VERIFYING) {
+                        send(messages.verifying());
+                    } else if (session.status() == LoginSession.Status.PENDING) {
+                        send(messages.serviceUnavailable());
+                    }
+                });
             }
         }
     }
