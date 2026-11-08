@@ -129,15 +129,12 @@ class LoginSessionStoreTest {
         assertEquals(null, store.find(PLAYER).orElseThrow().disconnectedAt(),
                 "仍在线会话的标志是 disconnectedAt 为空");
 
-        LoginSession differentIp = store.join(PLAYER, "PlayerOne", "198.51.100.7",
-                START.plusSeconds(3), LOGIN_TIMEOUT);
+        LoginSessionStore.JoinResult differentIp = store.joinWithConnection(
+                PLAYER, "PlayerOne", "198.51.100.7", START.plusSeconds(3), LOGIN_TIMEOUT);
 
-        assertEquals(LoginSession.Status.PENDING, differentIp.status(),
-                "同 UUID 不同 IP 的在线连接不能直接继承认证，必须重新登录");
-        assertEquals("198.51.100.7", differentIp.ip());
-        assertEquals(START.plusSeconds(3), differentIp.enteredAt());
-        assertEquals(START.plusSeconds(3).plus(LOGIN_TIMEOUT), differentIp.loginDeadline());
-        assertEquals(0L, differentIp.verificationId());
+        assertTrue(differentIp.rejected(), "在线会话不能被不同 IP 的新连接顶掉");
+        assertEquals(LoginSession.Status.AUTHENTICATED, differentIp.session().status());
+        assertEquals(IP, differentIp.session().ip(), "原会话的 IP 必须保持不变");
     }
 
     @Test
@@ -274,36 +271,35 @@ class LoginSessionStoreTest {
     }
 
     @Test
-    void duplicateJoinForAnOnlineAuthenticatedPlayerOnlyRefreshesActivity() {
+    void duplicateJoinForAnOnlineAuthenticatedPlayerIsRejected() {
         LoginSessionStore store = newStore();
         join(store, PLAYER, "PlayerOne", START);
         assertTrue(store.beginVerification(PLAYER, START.plusSeconds(1)).isPresent());
         assertTrue(store.authenticationSucceeded(PLAYER, 1L, START.plusSeconds(2)));
 
-        LoginSession duplicate = store.join(PLAYER, "PlayerOne", IP, START.plusSeconds(30),
-                Duration.ofMinutes(60));
+        LoginSessionStore.JoinResult duplicate = store.joinWithConnection(
+                PLAYER, "PlayerOne", IP, START.plusSeconds(30), Duration.ofMinutes(60));
 
-        assertEquals(LoginSession.Status.AUTHENTICATED, duplicate.status());
-        assertEquals(START, duplicate.enteredAt());
-        assertEquals(START.plusSeconds(30), duplicate.lastActivityAt());
-        assertEquals(null, duplicate.disconnectedAt());
-        assertEquals(START.plus(LOGIN_TIMEOUT), duplicate.loginDeadline(),
-                "重复在线事件不能延长原 deadline");
-        assertEquals(1L, duplicate.verificationId());
+        assertTrue(duplicate.rejected(), "在线会话不能被第二条连接顶替");
+        assertEquals(LoginSession.Status.AUTHENTICATED, duplicate.session().status());
+        assertEquals(START, duplicate.session().enteredAt());
+        assertEquals(START, duplicate.session().lastActivityAt());
+        assertEquals(START.plus(LOGIN_TIMEOUT), duplicate.session().loginDeadline());
+        assertEquals(1L, duplicate.session().verificationId());
     }
 
     @Test
-    void duplicateJoinForAnOnlinePendingPlayerKeepsTheOriginalDeadline() {
+    void duplicateJoinForAnOnlinePendingPlayerIsRejectedWithoutExtendingDeadline() {
         LoginSessionStore store = newStore();
         join(store, PLAYER, "PlayerOne", START);
 
-        LoginSession duplicate = store.join(PLAYER, "PlayerOne", IP, START.plusSeconds(60),
-                Duration.ofMinutes(30));
+        LoginSessionStore.JoinResult duplicate = store.joinWithConnection(
+                PLAYER, "PlayerOne", IP, START.plusSeconds(60), Duration.ofMinutes(30));
 
-        assertEquals(LoginSession.Status.PENDING, duplicate.status());
-        assertEquals(START, duplicate.enteredAt());
-        assertEquals(START.plusSeconds(60), duplicate.lastActivityAt());
-        assertEquals(START.plus(LOGIN_TIMEOUT), duplicate.loginDeadline(),
+        assertTrue(duplicate.rejected(), "在线会话不能被第二条连接顶替");
+        assertEquals(LoginSession.Status.PENDING, duplicate.session().status());
+        assertEquals(START, duplicate.session().enteredAt());
+        assertEquals(START.plus(LOGIN_TIMEOUT), duplicate.session().loginDeadline(),
                 "重复进服不能重新开始登录倒计时");
         assertTrue(store.timeOut(PLAYER, START.plus(LOGIN_TIMEOUT)));
     }
@@ -548,7 +544,7 @@ class LoginSessionStoreTest {
     }
 
     @Test
-    void expireGraceReclaimsVerificationCountersOnlyAfterTwentyFourHours() {
+    void verificationIdsNeverResetAcrossGraceExpiry() {
         LoginSessionStore store = newStore();
         Duration retention = Duration.ofHours(24);
 
@@ -559,24 +555,15 @@ class LoginSessionStoreTest {
         long secondId = store.beginVerification(PLAYER, START.plusSeconds(4)).orElseThrow();
         store.quit(PLAYER, START.plusSeconds(5));
         assertEquals(1L, firstId);
-        assertEquals(2L, secondId, "24 小时内校验编号必须继续单调递增");
+        assertEquals(2L, secondId, "校验编号必须全局单调递增");
 
-        // 距最后一次使用 24 小时还差 1 秒：回收不得提前发生，迟到结果仍可能到达。
-        Instant justInsideRetention = START.plus(retention).plusSeconds(3);
-        assertEquals(0, store.expireGrace(justInsideRetention));
-        join(store, PLAYER, "PlayerOne", justInsideRetention);
-        long thirdId = store.beginVerification(PLAYER, justInsideRetention.plusSeconds(1)).orElseThrow();
-        store.quit(PLAYER, justInsideRetention.plusSeconds(2));
-        assertEquals(3L, thirdId,
-                "保留期内 expireGrace 不得回收编号条目，否则旧连接的迟到结果会命中新会话");
-
-        // 超过 24 小时未使用：条目应被回收，下一次分配从 1 重新开始。
-        Instant afterRetention = justInsideRetention.plus(retention).plusSeconds(10);
+        // 无论宽限记录是否过期，全局编号都不能回退；否则旧连接的迟到结果
+        // 可能命中重连后重新从 1 开始的会话。
+        Instant afterRetention = START.plus(retention).plusSeconds(10);
         assertEquals(0, store.expireGrace(afterRetention));
         join(store, PLAYER, "PlayerOne", afterRetention);
-        long reclaimedId = store.beginVerification(PLAYER, afterRetention.plusSeconds(1)).orElseThrow();
-        assertEquals(1L, reclaimedId,
-                "超过 24 小时未使用的编号条目应被 expireGrace 回收，新分配必须从 1 重新开始");
+        long nextId = store.beginVerification(PLAYER, afterRetention.plusSeconds(1)).orElseThrow();
+        assertEquals(secondId + 1, nextId, "过期清理不得让校验编号回到 1");
     }
 
     // ---------------------------------------------------------------------
@@ -720,17 +707,18 @@ class LoginSessionStoreTest {
         LoginSessionStore store = newStore();
         LoginSessionStore.JoinResult first =
                 store.joinWithConnection(PLAYER, "PlayerOne", IP, START, LOGIN_TIMEOUT);
-
-        // 玩家快速重连：新连接的 join 先到，旧连接的 DisconnectEvent 后到。
+        // 旧连接先断线（事件正常到达），随后玩家重连。
+        store.quit(PLAYER, first.connectionId(), START.plusSeconds(1));
         LoginSessionStore.JoinResult second = store.joinWithConnection(
-                PLAYER, "PlayerOne", IP, START.plusSeconds(1), LOGIN_TIMEOUT);
+                PLAYER, "PlayerOne", IP, START.plusSeconds(2), LOGIN_TIMEOUT);
         LoginSession fresh = second.session();
 
-        store.quit(PLAYER, first.connectionId(), START.plusSeconds(2));
+        // 旧连接更迟的重复断线事件不能删掉新会话。
+        store.quit(PLAYER, first.connectionId(), START.plusSeconds(3));
         assertEquals(fresh, store.find(PLAYER).orElseThrow(),
                 "旧连接的迟到断线事件不能删掉新会话");
 
-        store.quit(PLAYER, second.connectionId(), START.plusSeconds(3));
+        store.quit(PLAYER, second.connectionId(), START.plusSeconds(4));
         assertTrue(store.find(PLAYER).isEmpty(), "当前连接断线仍应正常清理未认证会话");
     }
 }

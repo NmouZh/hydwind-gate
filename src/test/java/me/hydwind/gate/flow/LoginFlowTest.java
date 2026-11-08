@@ -45,9 +45,10 @@ class LoginFlowTest {
         // 宽限时长与登录超时无关，取一个固定值即可。
         store = new LoginSessionStore(Duration.ofMinutes(10));
         flow = new LoginFlow(store, website, messages, clock);
-        identity = new LoginIdentity(PLAYER, GAME_ID, IP);
         // 进服时由 Adapter 建会话；LoginFlow 自身不负责 join。
-        store.join(PLAYER, GAME_ID, IP, clock.instant(), LOGIN_TIMEOUT);
+        LoginSessionStore.JoinResult joined = store.joinWithConnection(
+                PLAYER, GAME_ID, IP, clock.instant(), LOGIN_TIMEOUT);
+        identity = new LoginIdentity(PLAYER, GAME_ID, IP, joined.connectionId());
     }
 
     @Test

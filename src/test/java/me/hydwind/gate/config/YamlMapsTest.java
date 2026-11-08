@@ -98,6 +98,11 @@ class YamlMapsTest {
         assertEquals(Integer.MIN_VALUE,
                 YamlMaps.intValue(Map.of("too-small", Long.MIN_VALUE), "too-small", 0),
                 "低于 int 下限要饱和，不能强转成正数");
+        assertThrows(IllegalArgumentException.class,
+                () -> YamlMaps.longValue(
+                        Map.of("big", new java.math.BigInteger("18446744073709551616")),
+                        "big", 0L),
+                "超出 long 的 YAML 整数不能截断成低位");
     }
 
     @Test

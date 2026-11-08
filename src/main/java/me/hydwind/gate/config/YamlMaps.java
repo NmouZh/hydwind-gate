@@ -1,5 +1,6 @@
 package me.hydwind.gate.config;
 
+import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -49,6 +50,14 @@ public final class YamlMaps {
      */
     public static long longValue(Map<String, Object> section, String key, long fallback) {
         Object value = section.get(key);
+        if (value instanceof BigInteger big) {
+            try {
+                return big.longValueExact();
+            } catch (ArithmeticException overflow) {
+                throw new IllegalArgumentException(
+                        "config value '" + key + "' is out of range: " + value, overflow);
+            }
+        }
         if (value instanceof Number number) {
             return number.longValue();
         }
@@ -81,6 +90,10 @@ public final class YamlMaps {
             String normalized = string.trim();
             if (normalized.equalsIgnoreCase("true")) return true;
             if (normalized.equalsIgnoreCase("false")) return false;
+            throw new IllegalArgumentException(
+                    "config value '" + key + "' is not a boolean: " + value);
+        }
+        if (value != null) {
             throw new IllegalArgumentException(
                     "config value '" + key + "' is not a boolean: " + value);
         }

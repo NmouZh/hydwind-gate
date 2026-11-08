@@ -49,8 +49,15 @@ public final class LoginFlow {
         }
 
         Optional<LoginSession> session = sessions.find(identity.uuid());
-        if (session.isPresent() && session.get().isAuthenticated()) {
-            return simple(SubmitKind.ALREADY_AUTHENTICATED);
+        if (session.isPresent()) {
+            // 连接代际或 IP 对不上：这是旧连接/顶替连接在借受害者的会话提交。
+            if (!sessions.isCurrentConnection(identity.uuid(), identity.connectionId())
+                    || !session.get().ip().equals(identity.ip())) {
+                return simple(SubmitKind.REJECTED);
+            }
+            if (session.get().isAuthenticated()) {
+                return simple(SubmitKind.ALREADY_AUTHENTICATED);
+            }
         }
 
         return switch (command.status()) {
@@ -81,7 +88,8 @@ public final class LoginFlow {
 
         LoginFeedback feedback = LoginFeedback.from(result, messages, identity.gameId());
         if (feedback.authenticated()) {
-            if (!sessions.authenticationSucceeded(identity.uuid(), verificationId, clock.instant())) {
+            if (!sessions.authenticationSucceeded(
+                    identity.uuid(), identity.connectionId(), verificationId, clock.instant())) {
                 // 会话已超时、已断线或编号不匹配：迟到的成功结果不得放行，
                 // 也不再向玩家播报成功文案。
                 return new VerifyOutcome(false, false, false, "", null);
@@ -91,7 +99,8 @@ public final class LoginFlow {
 
         // 失败结果也必须归属到发起它的那次校验：玩家可能已经重试并产生了新编号。
         // 迟到的失败结果不得改写新尝试的状态，也不该向玩家播报旧文案或触发重启。
-        if (!sessions.authenticationFailed(identity.uuid(), verificationId, clock.instant())) {
+        if (!sessions.authenticationFailed(
+                identity.uuid(), identity.connectionId(), verificationId, clock.instant())) {
             return new VerifyOutcome(false, false, false, "", null);
         }
         return new VerifyOutcome(false, feedback.triggerRestart(),
@@ -101,7 +110,7 @@ public final class LoginFlow {
     /** 会话自己的登录截止时刻已到：标记 TIMED_OUT。 */
     public boolean timeout(LoginIdentity identity) {
         Objects.requireNonNull(identity, "identity");
-        return sessions.timeOut(identity.uuid(), clock.instant());
+        return sessions.timeOut(identity.uuid(), identity.connectionId(), clock.instant());
     }
 
     private SubmitResult beginVerification(LoginIdentity identity, String code) {
@@ -109,7 +118,8 @@ public final class LoginFlow {
             return simple(SubmitKind.REJECTED);
         }
 
-        OptionalLong verificationId = sessions.beginVerification(identity.uuid(), clock.instant());
+        OptionalLong verificationId = sessions.beginVerification(
+                identity.uuid(), identity.connectionId(), clock.instant());
         if (verificationId.isEmpty()) {
             // 只有 PENDING 能进入 VERIFYING；验证中、已超时、已认证都会被拒绝。
             return simple(SubmitKind.REJECTED);

@@ -70,6 +70,12 @@ public final class LoginGateListener {
                 plugin.pluginConfig().loginTimeout());
         LoginSession session = joined.session();
         long connectionId = joined.connectionId();
+        if (joined.rejected()) {
+            // 同 UUID 还有在线连接，且游戏 ID/IP 不同：不把这个连接放进门禁流程。
+            event.addOnJoinCallback(() -> player.disconnect(Component.text(
+                    me.hydwind.gate.ui.Messages.defaults().serviceMisconfigured())));
+            return;
+        }
         connectionIds.put(player, connectionId);
 
         if (session.isAuthenticated()) {
@@ -85,7 +91,10 @@ public final class LoginGateListener {
     @Subscribe
     public void onServerPreConnect(ServerPreConnectEvent event) {
         // 唯一的放行判据在会话 Module 里；本 Adapter 只负责把拒绝转成事件结果。
-        if (!sessionStore.isAuthenticated(event.getPlayer().getUniqueId())) {
+        // 必须同时校验连接代际：同 UUID 的另一个连接不能借已认证会话进后端。
+        Long connectionId = connectionIds.get(event.getPlayer());
+        if (connectionId == null
+                || !sessionStore.isAuthenticated(event.getPlayer().getUniqueId(), connectionId)) {
             event.setResult(ServerPreConnectEvent.ServerResult.denied());
         }
     }
@@ -96,11 +105,18 @@ public final class LoginGateListener {
         // 攻击者连接的 UUID。若照常 quit，任何未认证的人都能用别人的名字连接一次
         // 就清掉对方的会话（PENDING 会被直接删除，玩家永久卡在 limbo）。
         // 被拒绝的连接从未建立过会话，这里必须忽略。
+        Player player = event.getPlayer();
+        Long connectionId = connectionIds.get(player);
         if (!shouldReleaseSession(event.getLoginStatus())) {
+            // 同名冲突事件可能携带的是被顶掉的那条连接；只有确认它还没进后端时
+            // 才丢弃它的连接代际，避免误伤正在主服的目标玩家。
+            if (connectionId != null && player.getCurrentServer().isEmpty()) {
+                connectionIds.remove(player);
+                sessionStore.dropConnection(player.getUniqueId(), connectionId);
+            }
             return;
         }
-        Player player = event.getPlayer();
-        Long connectionId = connectionIds.remove(player);
+        connectionId = connectionIds.remove(player);
         if (connectionId == null) {
             // 从未由本监听器建立过连接代际（例如进 limbo 之前就被代理拒绝），
             // 不能拿 UUID 去删别的连接留下的会话。
@@ -122,7 +138,7 @@ public final class LoginGateListener {
 
     private void spawnInLimbo(Player player, long connectionId) {
         try {
-            limboLoginService.spawnInLimbo(player);
+            limboLoginService.spawnInLimbo(player, connectionId);
         } catch (RuntimeException exception) {
             logger.error("Failed to spawn player {} into limbo; denying access.", player.getUsername(), exception);
             failOpenConnection(player, connectionId);

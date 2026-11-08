@@ -34,7 +34,7 @@ public record WebsiteSettings(
      */
     WebsiteSettings(String baseUrl, String token, int connectTimeoutMillis,
                     int readTimeoutMillis, String healthPath) {
-        this(baseUrl, token, connectTimeoutMillis, readTimeoutMillis, healthPath, true);
+        this(baseUrl, token, connectTimeoutMillis, readTimeoutMillis, healthPath, false);
     }
 
     public WebsiteSettings {

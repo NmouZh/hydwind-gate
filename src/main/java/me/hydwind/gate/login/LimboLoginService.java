@@ -106,12 +106,12 @@ public final class LimboLoginService implements LimboResidents {
     }
 
     /** 把玩家放进 limbo；无论调用线程为何，LimboAPI 会切回玩家事件循环。 */
-    public void spawnInLimbo(Player player) {
+    public void spawnInLimbo(Player player, long connectionId) {
         Limbo activeLimbo = limbo;
         if (closed || activeLimbo == null || factory == null) {
             throw new IllegalStateException("Limbo is not initialized or already shut down");
         }
-        activeLimbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this));
+        activeLimbo.spawnPlayer(player, new LoginSessionHandler(plugin, player, this, connectionId));
     }
 
     /** limbo 玩家在 {@code onSpawn} 后登记，供管理命令与状态统计使用。 */
@@ -121,7 +121,11 @@ public final class LimboLoginService implements LimboResidents {
             handler.shutdown();
             return;
         }
-        residents.put(handler.uuid(), handler);
+        LoginSessionHandler previous = residents.put(handler.uuid(), handler);
+        if (previous != null && previous != handler) {
+            // 同 UUID 的新 handler 顶替旧 handler 时，旧 handler 的任务必须停掉。
+            previous.shutdown();
+        }
         // put 之后再检查一次：shutdown 可能在上面的 closed 读取之后、
         // put 之前完成快照和清空，若不再检查，这个 handler 会落进已关闭的服务，
         // 提示与超时任务永远不会被取消。

@@ -97,24 +97,46 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
             HttpResponse<InputStream> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
             String retryAfterHeader = response.headers().firstValue("Retry-After").orElse(null);
+            int status = response.statusCode();
+
+            // 先按状态码分类：5xx/401/403/404/3xx 不需要 body，避免一个超大
+            // 错误页把 5xx 误报成契约错误、把 429 的限流文案丢掉。
+            if (status >= 500) {
+                closeBody(response);
+                return VerifyResult.unreachable();
+            }
+            if (status == 401 || status == 403 || status == 404) {
+                closeBody(response);
+                return mapVerifyResponse(status, "", retryAfterHeader);
+            }
+            if (status >= 300 && status < 400) {
+                closeBody(response);
+                logger.warn("Website verify returned redirect {}; check website.base-url scheme/host.",
+                        status);
+                return VerifyResult.contractMismatch();
+            }
+
             String body;
             try {
-                body = readBody(response);
+                body = readBody(response, readTimeout);
             } catch (ResponseTooLargeException e) {
                 logger.warn("Website verify response exceeded {} bytes; treating as contract mismatch.",
                         MAX_RESPONSE_BYTES);
-                return VerifyResult.contractMismatch();
+                return status == 429
+                        ? VerifyResult.rateLimited(null, null)
+                        : VerifyResult.contractMismatch();
             }
-            return mapVerifyResponse(response.statusCode(), body, retryAfterHeader);
+            return mapVerifyResponse(status, body, retryAfterHeader);
         } catch (SSLException e) {
             // 证书/握手问题重启网站也不能修复；按配置错误处理，不触发重启。
             logger.warn("Website TLS handshake failed: {}", e.toString());
             return VerifyResult.contractMismatch();
         } catch (IOException e) {
-            return VerifyResult.unreachable();
+            // reload/关闭会有序 shutdown 客户端；本地取消不是“网站不可达”，不能触发重启。
+            return closed ? VerifyResult.contractMismatch() : VerifyResult.unreachable();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return VerifyResult.unreachable();
+            return closed ? VerifyResult.contractMismatch() : VerifyResult.unreachable();
         }
     }
 
@@ -139,36 +161,73 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
         try {
             HttpResponse<InputStream> response =
                     httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            int status = response.statusCode();
+            if (status != 200) {
+                closeBody(response);
+                if (status >= 300 && status < 400) {
+                    logger.warn("Website health returned redirect {}; check website.base-url scheme/host.",
+                            status);
+                }
+                return HealthResult.unhealthyContract();
+            }
+
             String body;
             try {
-                body = readBody(response);
+                body = readBody(response, timeout);
             } catch (ResponseTooLargeException e) {
                 logger.warn("Website health response exceeded {} bytes; treating as contract mismatch.",
                         MAX_RESPONSE_BYTES);
                 return HealthResult.unhealthyContract();
             }
-            return mapHealthResponse(response.statusCode(), body);
+            return mapHealthResponse(status, body);
         } catch (SSLException e) {
             logger.warn("Website TLS handshake failed during health check: {}", e.toString());
             return HealthResult.unhealthyContract();
         } catch (IOException e) {
-            return HealthResult.unhealthy();
+            return closed ? HealthResult.unhealthyContract() : HealthResult.unhealthy();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return HealthResult.unhealthy();
+            return closed ? HealthResult.unhealthyContract() : HealthResult.unhealthy();
         }
     }
 
     /** 标记为已关闭。旧代际可能仍被在途请求引用，因此不阻塞关闭流程。 */
     private volatile boolean closed;
 
-    /** 读取响应体，超过 {@link #MAX_RESPONSE_BYTES} 立即中止，避免 OOM。 */
-    private static String readBody(HttpResponse<InputStream> response) throws IOException {
-        long declared = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-        if (declared > MAX_RESPONSE_BYTES) {
-            throw new ResponseTooLargeException();
-        }
-        try (InputStream input = response.body()) {
+    /**
+     * 读取响应体：限制大小并给整个 body 读取加截止时间。
+     *
+     * <p>{@link HttpRequest#timeout} 只覆盖响应头阶段（JDK-8258397）；网站发完
+     * 响应头后停住时，裸 InputStream 会无限阻塞并占满虚拟线程/信号量。
+     * 看门狗线程到点关闭流，让 read 抛 IOException 退出。</p>
+     */
+    private String readBody(HttpResponse<InputStream> response, Duration timeout) throws IOException {
+        InputStream input = response.body();
+        if (input == null) throw new ResponseTooLargeException();
+
+        Thread watchdog = Thread.ofVirtual().start(() -> {
+            try {
+                Thread.sleep(Math.max(1L, timeout.toMillis()));
+                input.close();
+            } catch (InterruptedException ignored) {
+                // 正常读取完成后由主线程 interrupt。
+            } catch (IOException ignored) {
+                // 流已经被主线程关闭。
+            }
+        });
+
+        try (input) {
+            long declared;
+            try {
+                declared = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            } catch (RuntimeException malformed) {
+                // 非法 Content-Length 属于契约错误，不能让 NumberFormatException 逃逸成“不可达”。
+                throw new ResponseTooLargeException();
+            }
+            if (declared > MAX_RESPONSE_BYTES) {
+                throw new ResponseTooLargeException();
+            }
+
             ByteArrayOutputStream output = new ByteArrayOutputStream(
                     declared > 0 ? (int) Math.min(declared, 8192L) : 8192);
             byte[] buffer = new byte[8192];
@@ -182,6 +241,16 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
                 output.write(buffer, 0, read);
             }
             return output.toString(StandardCharsets.UTF_8);
+        } finally {
+            watchdog.interrupt();
+        }
+    }
+
+    private static void closeBody(HttpResponse<InputStream> response) {
+        try {
+            response.body().close();
+        } catch (IOException ignored) {
+            // 丢弃响应体时的关闭失败不影响分类结果。
         }
     }
 
@@ -191,14 +260,14 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
     /**
      * 标记客户端关闭，使后续请求立即返回“契约不匹配”而不是伪装成网站不可达。
      *
-     * <p>{@code shutdownNow()} 不等待在途请求，适合 reload 所在的调度线程；
-     * 旧代际的连接池与 selector 会在调用后尽快释放，避免每次 reload 泄漏一个客户端。</p>
+     * <p>用 {@code shutdown()} 而不是 {@code shutdownNow()}：reload 时允许在途请求
+     * 完成，避免把本地取消误报成网站不可达；关闭后新请求立即返回契约不匹配。</p>
      */
     @Override
     public void close() {
         closed = true;
         try {
-            httpClient.shutdownNow();
+            httpClient.shutdown();
         } catch (RuntimeException exception) {
             // 关闭失败不应影响 reload；旧代际最终会被 GC 回收。
             logger.debug("HttpClient shutdown failed: {}", exception.toString());
@@ -310,6 +379,8 @@ public final class HttpWebsiteClient implements WebsiteClient, AutoCloseable {
         }
         if (retryAfterMs == null) {
             retryAfterMs = parseRetryAfterHeader(retryAfterHeader);
+        } else {
+            retryAfterMs = Math.max(0L, Math.min(retryAfterMs, MAX_RETRY_AFTER_MS));
         }
         return VerifyResult.rateLimited(retryAfterMs, attemptsRemaining);
     }
