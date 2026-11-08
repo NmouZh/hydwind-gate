@@ -14,15 +14,16 @@ import java.util.Objects;
  */
 public record RestartSettings(Path requestFile, Duration cooldown, Duration window, int maxPerWindow) {
 
+    // 常量必须先于 DEFAULT 初始化：DEFAULT 的构造器会读这些上限。
+    private static final Duration MAX_COOLDOWN = Duration.ofDays(1);
+    private static final Duration MAX_WINDOW = Duration.ofDays(1);
+    private static final int MAX_PER_WINDOW = 100;
+
     public static final RestartSettings DEFAULT = new RestartSettings(
             Path.of("/run/hydwind/restart-request"),
             Duration.ofMinutes(10),
             Duration.ofHours(1),
             2);
-
-    private static final Duration MAX_COOLDOWN = Duration.ofDays(1);
-    private static final Duration MAX_WINDOW = Duration.ofDays(1);
-    private static final int MAX_PER_WINDOW = 100;
 
     public RestartSettings {
         Objects.requireNonNull(requestFile, "requestFile");
